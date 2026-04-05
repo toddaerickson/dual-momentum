@@ -75,7 +75,7 @@ if st.sidebar.button("Refresh Data", type="primary"):
 
 view = st.sidebar.radio(
     "View",
-    ["Current Signals", "Signal History", "SPY + Regimes", "Backtest Performance", "Allocation Over Time"],
+    ["Current Signals", "Signal History", "SPY + Regimes", "Backtest Performance", "Allocation Over Time", "Parameter Sensitivity"],
 )
 
 
@@ -739,9 +739,100 @@ elif view == "Backtest Performance":
     metrics_df = pd.DataFrame(all_metrics)
     st.dataframe(metrics_df, use_container_width=True)
 
+    # ── Annual Returns Bar Chart ──
+    st.subheader("Annual Returns by Strategy")
+    annual_data = {}
+    for name, df in results.items():
+        df_copy = df.copy()
+        df_copy["year"] = df_copy.index.year
+        annual = df_copy.groupby("year")["daily_return"].apply(
+            lambda x: (1 + x).prod() - 1
+        )
+        annual_data[strategy_labels.get(name, name)] = annual
+
+    annual_df = pd.DataFrame(annual_data)
+    fig_annual = go.Figure()
+    for col in annual_df.columns:
+        sname = [k for k, v in strategy_labels.items() if v == col]
+        color = strategy_colors.get(sname[0], "#95a5a6") if sname else "#95a5a6"
+        fig_annual.add_trace(go.Bar(
+            x=annual_df.index, y=annual_df[col] * 100,
+            name=col, marker_color=color,
+        ))
+
+    fig_annual.update_layout(
+        barmode="group",
+        yaxis_title="Return (%)",
+        height=400,
+        hovermode="x unified",
+        margin=dict(t=20, b=20, l=60, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_annual, use_container_width=True)
+
+    # ── Monthly Returns Heatmap (gem_hy) ──
+    st.subheader("Monthly Returns Heatmap (GEM + HY Overlay)")
+    gem_hy_df = results["gem_hy"].copy()
+    gem_hy_df["year"] = gem_hy_df.index.year
+    gem_hy_df["month"] = gem_hy_df.index.month
+    monthly = gem_hy_df.groupby(["year", "month"])["daily_return"].apply(
+        lambda x: (1 + x).prod() - 1
+    ).unstack(level="month")
+    monthly.columns = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    fig_heatmap = go.Figure(data=go.Heatmap(
+        z=monthly.values * 100,
+        x=monthly.columns,
+        y=monthly.index,
+        colorscale=[
+            [0, "#e74c3c"],
+            [0.5, "#f5f5f5"],
+            [1, "#2ecc71"],
+        ],
+        zmid=0,
+        text=[[f"{v:.1f}%" if not np.isnan(v) else "" for v in row] for row in monthly.values * 100],
+        texttemplate="%{text}",
+        textfont=dict(size=10),
+        colorbar=dict(title="Return %"),
+    ))
+    fig_heatmap.update_layout(
+        yaxis=dict(autorange="reversed", dtick=1),
+        height=max(300, len(monthly) * 22),
+        margin=dict(t=20, b=20, l=60, r=20),
+    )
+    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+    # ── Rolling 3-Year Sharpe ──
+    st.subheader("Rolling 3-Year Sharpe Ratio")
+    fig_sharpe = go.Figure()
+    window = 252 * 3  # 3 years of trading days
+    for name, df in results.items():
+        if len(df) < window:
+            continue
+        rolling_mean = df["daily_return"].rolling(window).mean() * 252
+        rolling_std = df["daily_return"].rolling(window).std() * np.sqrt(252)
+        rolling_sharpe = rolling_mean / rolling_std
+        rolling_sharpe = rolling_sharpe.dropna()
+        fig_sharpe.add_trace(go.Scatter(
+            x=rolling_sharpe.index, y=rolling_sharpe.values,
+            name=strategy_labels.get(name, name),
+            line=dict(color=strategy_colors.get(name, "#95a5a6"), width=1.5),
+        ))
+
+    fig_sharpe.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig_sharpe.update_layout(
+        yaxis_title="Sharpe Ratio",
+        height=400,
+        hovermode="x unified",
+        margin=dict(t=20, b=20, l=60, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_sharpe, use_container_width=True)
+
 
 # ──────────────────────────────────────────────
-# 4. Allocation Over Time View
+# 5. Allocation Over Time View
 # ──────────────────────────────────────────────
 
 elif view == "Allocation Over Time":
@@ -866,6 +957,257 @@ elif view == "Allocation Over Time":
 
         fig_regime.update_layout(height=350, showlegend=False, margin=dict(t=40, b=20, l=60, r=20))
         st.plotly_chart(fig_regime, use_container_width=True)
+
+
+# ──────────────────────────────────────────────
+# 6. Parameter Sensitivity View
+# ──────────────────────────────────────────────
+
+elif view == "Parameter Sensitivity":
+    st.subheader("Parameter Sensitivity Analysis")
+    st.caption("How robust are the current parameters? Sweep lookback periods and HY thresholds to find out.")
+
+    # ── GEM Lookback Sweep ──
+    st.markdown("#### GEM Lookback Period")
+    st.caption("Current setting: 12 months. Testing 3, 6, 9, 12, 15, 18 months.")
+
+    lookback_months = [3, 6, 9, 12, 15, 18]
+
+    @st.cache_data(ttl=3600)
+    def run_lookback_sweep():
+        """Run gem_hy backtest with different lookback periods."""
+        all_data = data_mod.fetch_all()
+        prices = all_data["prices"]
+        hy_spread = all_data["hy_spread"]
+        daily_returns = prices.pct_change().fillna(0)
+
+        start_date = config.BACKTEST_START
+        end_date = prices.index[-1].strftime("%Y-%m-%d")
+
+        # Get rebalance dates
+        mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+        filtered = prices[mask]
+        month_ends = filtered.groupby(filtered.index.to_period("M")).apply(lambda x: x.index[-1])
+        rebalance_dates = set(month_ends)
+
+        sweep_results = {}
+        for lb in lookback_months:
+            current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
+            results_list = []
+            tc_bps = config.TRANSACTION_COST_BPS / 10000
+
+            for date in daily_returns[mask].index:
+                if date in rebalance_dates:
+                    gem_sig = signals_mod.compute_gem_signal(prices, date, lookback_months=lb)
+                    hy_available = len(hy_spread) > 0 and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+                    if hy_available:
+                        hy_reg = signals_mod.compute_hy_regime(hy_spread, date)
+                    else:
+                        hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
+
+                    target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
+                    tc = sum(tc_bps for t in config.ALL_TICKERS
+                             if abs(target_weights.get(t, 0) - current_weights.get(t, 0)) > 1e-6)
+                    current_weights = target_weights
+
+                day_ret = sum(
+                    current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
+                    for t in config.ALL_TICKERS if t in daily_returns.columns
+                )
+                if date in rebalance_dates:
+                    day_ret -= tc
+                results_list.append({"date": date, "daily_return": day_ret})
+
+            df = pd.DataFrame(results_list).set_index("date")
+            df["cumulative"] = (1 + df["daily_return"]).cumprod()
+            sweep_results[lb] = df
+
+        return sweep_results
+
+    with st.spinner("Running lookback sweep..."):
+        try:
+            lookback_results = run_lookback_sweep()
+        except Exception as e:
+            st.error(f"Lookback sweep failed: {e}")
+            st.stop()
+
+    # Equity curves
+    fig_lb = go.Figure()
+    lb_colors = {3: "#e74c3c", 6: "#e67e22", 9: "#f1c40f", 12: "#2ecc71", 15: "#3498db", 18: "#9b59b6"}
+    for lb, df in lookback_results.items():
+        label = f"{lb}M" + (" (current)" if lb == 12 else "")
+        width = 2.5 if lb == 12 else 1.5
+        fig_lb.add_trace(go.Scatter(
+            x=df.index, y=df["cumulative"],
+            name=label,
+            line=dict(color=lb_colors.get(lb, "#95a5a6"), width=width),
+        ))
+
+    fig_lb.update_layout(
+        title="Growth of $1 by GEM Lookback Period",
+        yaxis_title="Cumulative Value ($)",
+        yaxis_type="log",
+        height=450,
+        hovermode="x unified",
+        margin=dict(t=40, b=20, l=60, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_lb, use_container_width=True)
+
+    # Metrics comparison
+    lb_metrics = {}
+    for lb, df in lookback_results.items():
+        m = performance.compute_metrics(df)
+        label = f"{lb}M" + (" *" if lb == 12 else "")
+        lb_metrics[label] = {
+            "CAGR": f"{m['cagr']:+.1%}",
+            "Max Drawdown": f"{m['max_drawdown']:.1%}",
+            "Volatility": f"{m['ann_volatility']:.1%}",
+            "Sharpe": f"{m['sharpe']:.2f}",
+            "Sortino": f"{m['sortino']:.2f}",
+        }
+    st.dataframe(pd.DataFrame(lb_metrics), use_container_width=True)
+    st.caption("* = current setting")
+
+    # ── HY Threshold Sweep ──
+    st.markdown("#### HY Regime Thresholds")
+    st.caption("Current: TIGHT < 350, NORMAL < 500, STRESSED < 700. Testing tighter and wider bands.")
+
+    @st.cache_data(ttl=3600)
+    def run_threshold_sweep():
+        """Run gem_hy backtest with different HY threshold sets."""
+        import copy
+        all_data = data_mod.fetch_all()
+        prices = all_data["prices"]
+        hy_spread = all_data["hy_spread"]
+        daily_returns = prices.pct_change().fillna(0)
+
+        start_date = config.BACKTEST_START
+        end_date = prices.index[-1].strftime("%Y-%m-%d")
+
+        mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+        filtered = prices[mask]
+        month_ends = filtered.groupby(filtered.index.to_period("M")).apply(lambda x: x.index[-1])
+        rebalance_dates = set(month_ends)
+
+        threshold_sets = {
+            "Tight (250/400/600)": {"TIGHT": 250, "NORMAL": 400, "STRESSED": 600},
+            "Current (350/500/700)": {"TIGHT": 350, "NORMAL": 500, "STRESSED": 700},
+            "Wide (450/600/800)": {"TIGHT": 450, "NORMAL": 600, "STRESSED": 800},
+            "Very Wide (500/700/900)": {"TIGHT": 500, "NORMAL": 700, "STRESSED": 900},
+        }
+
+        sweep_results = {}
+        for label, hy_thresholds in threshold_sets.items():
+            current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
+            results_list = []
+            tc_bps = config.TRANSACTION_COST_BPS / 10000
+
+            for date in daily_returns[mask].index:
+                if date in rebalance_dates:
+                    gem_sig = signals_mod.compute_gem_signal(prices, date)
+
+                    hy_available = len(hy_spread) > 0 and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+                    if hy_available:
+                        # Compute regime with custom thresholds
+                        as_of = pd.Timestamp(date)
+                        available = hy_spread[hy_spread.index <= as_of]
+                        if len(available) > 0:
+                            current_spread = float(available.iloc[-1])
+                            roc_start = as_of - pd.DateOffset(months=3)
+                            available_past = hy_spread[hy_spread.index <= roc_start]
+                            if len(available_past) > 0:
+                                spread_change = current_spread - float(available_past.iloc[-1])
+                            else:
+                                spread_change = 0
+
+                            if current_spread < hy_thresholds["TIGHT"]:
+                                regime = "TIGHT"
+                            elif current_spread < hy_thresholds["NORMAL"]:
+                                regime = "NORMAL"
+                            elif current_spread < hy_thresholds["STRESSED"]:
+                                regime = "STRESSED"
+                            else:
+                                regime = "CRISIS"
+
+                            fast_widen = spread_change > config.HY_ROC_THRESHOLDS["WIDENING_FAST"]
+                            hy_reg = {"regime": regime, "fast_widen_override": fast_widen}
+                        else:
+                            hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
+                    else:
+                        hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
+
+                    target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
+                    tc = sum(tc_bps for t in config.ALL_TICKERS
+                             if abs(target_weights.get(t, 0) - current_weights.get(t, 0)) > 1e-6)
+                    current_weights = target_weights
+
+                day_ret = sum(
+                    current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
+                    for t in config.ALL_TICKERS if t in daily_returns.columns
+                )
+                if date in rebalance_dates:
+                    day_ret -= tc
+                results_list.append({"date": date, "daily_return": day_ret})
+
+            df = pd.DataFrame(results_list).set_index("date")
+            df["cumulative"] = (1 + df["daily_return"]).cumprod()
+            sweep_results[label] = df
+
+        return sweep_results
+
+    with st.spinner("Running threshold sweep..."):
+        try:
+            threshold_results = run_threshold_sweep()
+        except Exception as e:
+            st.error(f"Threshold sweep failed: {e}")
+            st.stop()
+
+    # Equity curves
+    fig_th = go.Figure()
+    th_colors = {
+        "Tight (250/400/600)": "#e74c3c",
+        "Current (350/500/700)": "#2ecc71",
+        "Wide (450/600/800)": "#3498db",
+        "Very Wide (500/700/900)": "#9b59b6",
+    }
+    for label, df in threshold_results.items():
+        width = 2.5 if "Current" in label else 1.5
+        fig_th.add_trace(go.Scatter(
+            x=df.index, y=df["cumulative"],
+            name=label,
+            line=dict(color=th_colors.get(label, "#95a5a6"), width=width),
+        ))
+
+    fig_th.update_layout(
+        title="Growth of $1 by HY Regime Thresholds",
+        yaxis_title="Cumulative Value ($)",
+        yaxis_type="log",
+        height=450,
+        hovermode="x unified",
+        margin=dict(t=40, b=20, l=60, r=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_th, use_container_width=True)
+
+    # Metrics comparison
+    th_metrics = {}
+    for label, df in threshold_results.items():
+        m = performance.compute_metrics(df)
+        th_metrics[label] = {
+            "CAGR": f"{m['cagr']:+.1%}",
+            "Max Drawdown": f"{m['max_drawdown']:.1%}",
+            "Volatility": f"{m['ann_volatility']:.1%}",
+            "Sharpe": f"{m['sharpe']:.2f}",
+            "Sortino": f"{m['sortino']:.2f}",
+        }
+    st.dataframe(pd.DataFrame(th_metrics), use_container_width=True)
+
+    st.markdown("""
+**How to read this:** If the current parameters (highlighted) perform similarly to nearby alternatives,
+the model is robust — small changes in thresholds don't materially change outcomes.
+If performance is highly sensitive to a specific parameter, that's a fragility worth monitoring.
+""")
 
 
 # ──────────────────────────────────────────────

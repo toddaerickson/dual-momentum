@@ -1,0 +1,29 @@
+name: Weekly Summary Email
+
+on:
+  schedule:
+    - cron: '0 22 * * 0'  # 10 PM UTC Sunday (6 PM ET)
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  weekly-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send weekly summary
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+        run: python run_weekly.py
