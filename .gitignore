@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Cached market data
+data/cache/
+
+# Logs
+logs/
+
+# Claude Code local settings
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment / secrets
+.env
+*.env

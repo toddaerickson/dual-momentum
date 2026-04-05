@@ -1,0 +1,282 @@
+"""
+Backtest Engine: Historical simulation of the model portfolio.
+
+Strategies:
+  - gem_hy:     GEM + HY spread overlay (the full model)
+  - gem_pure:   GEM only, no HY overlay (control)
+  - gem_floor:  GEM + HY overlay with 70% equity floor
+  - sixty_forty: 60% SPY / 40% SHY, annual rebalance (control)
+  - buy_hold:   100% SPY buy-and-hold (control)
+
+Critical constraint: NO FUTURE DATA LEAKAGE.
+All signals computed using only data available as of the decision date.
+"""
+
+import json
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
+import config
+import data as data_mod
+import signals as signals_mod
+import portfolio as portfolio_mod
+
+
+def _get_month_end_dates(
+    prices: pd.DataFrame,
+    start_date: str,
+    end_date: str = None,
+) -> list[pd.Timestamp]:
+    """Get last trading day of each month within the date range."""
+    if end_date is None:
+        end_date = prices.index[-1].strftime("%Y-%m-%d")
+
+    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+    filtered = prices[mask]
+
+    # Group by year-month, take last date in each group
+    month_ends = filtered.groupby(filtered.index.to_period("M")).apply(
+        lambda x: x.index[-1]
+    )
+    return list(month_ends)
+
+
+def _compute_daily_returns(prices: pd.DataFrame) -> pd.DataFrame:
+    """Compute daily returns from price series."""
+    return prices.pct_change().fillna(0)
+
+
+def run_backtest(
+    start_date: str = None,
+    end_date: str = None,
+    strategy: str = "gem_hy",
+) -> pd.DataFrame:
+    """
+    Run historical backtest for the specified strategy.
+
+    Args:
+        start_date: Backtest start (default: config.BACKTEST_START)
+        end_date: Backtest end (default: latest data)
+        strategy: One of 'gem_hy', 'gem_pure', 'sixty_forty', 'buy_hold'
+
+    Returns:
+        DataFrame with daily portfolio values and metadata
+    """
+    if start_date is None:
+        start_date = config.BACKTEST_START
+
+    # Fetch data (need extra lookback for 12-month signal)
+    fetch_start = (pd.Timestamp(start_date) - pd.DateOffset(months=15)).strftime("%Y-%m-%d")
+    prices = data_mod.get_etf_prices(start_date=fetch_start, end_date=end_date)
+    hy_spread = data_mod.get_hy_spread(start_date=fetch_start)
+    daily_returns = _compute_daily_returns(prices)
+
+    if end_date is None:
+        end_date = prices.index[-1].strftime("%Y-%m-%d")
+
+    # Get rebalance dates (month-ends)
+    rebalance_dates = _get_month_end_dates(prices, start_date, end_date)
+
+    if strategy == "buy_hold":
+        return _run_buy_hold(prices, daily_returns, start_date, end_date)
+    elif strategy == "sixty_forty":
+        return _run_sixty_forty(prices, daily_returns, rebalance_dates, start_date, end_date)
+    elif strategy == "gem_pure":
+        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+                        start_date, end_date, use_hy_overlay=False)
+    elif strategy == "gem_hy":
+        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+                        start_date, end_date, use_hy_overlay=True)
+    elif strategy == "gem_floor":
+        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+                        start_date, end_date, use_hy_overlay=True, use_floor=True)
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}")
+
+
+def _run_buy_hold(
+    prices: pd.DataFrame,
+    daily_returns: pd.DataFrame,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """100% SPY buy-and-hold."""
+    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+    spy_returns = daily_returns.loc[mask, "SPY"]
+
+    result = pd.DataFrame(index=spy_returns.index)
+    result["daily_return"] = spy_returns
+    result["cumulative"] = (1 + spy_returns).cumprod()
+    result["strategy"] = "buy_hold"
+    result["weights"] = json.dumps({"SPY": 1.0})
+    result["gem_signal"] = ""
+    result["hy_regime"] = ""
+    return result
+
+
+def _run_sixty_forty(
+    prices: pd.DataFrame,
+    daily_returns: pd.DataFrame,
+    rebalance_dates: list,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """60% SPY / 40% SHY, rebalanced monthly."""
+    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+    filtered_returns = daily_returns[mask]
+
+    weights = {"SPY": 0.6, "SHY": 0.4}
+    portfolio_returns = []
+
+    for date in filtered_returns.index:
+        day_ret = sum(
+            weights.get(t, 0) * filtered_returns.loc[date].get(t, 0)
+            for t in config.ALL_TICKERS
+        )
+        portfolio_returns.append(day_ret)
+
+    result = pd.DataFrame(index=filtered_returns.index)
+    result["daily_return"] = portfolio_returns
+    result["cumulative"] = (1 + result["daily_return"]).cumprod()
+    result["strategy"] = "sixty_forty"
+    result["weights"] = json.dumps(weights)
+    result["gem_signal"] = ""
+    result["hy_regime"] = ""
+    return result
+
+
+def _run_gem(
+    prices: pd.DataFrame,
+    daily_returns: pd.DataFrame,
+    hy_spread: pd.Series,
+    rebalance_dates: list,
+    start_date: str,
+    end_date: str,
+    use_hy_overlay: bool = True,
+    use_floor: bool = False,
+) -> pd.DataFrame:
+    """
+    Run GEM strategy (with or without HY overlay).
+
+    Rebalances on last trading day of each month.
+    Transaction costs applied on position changes.
+    """
+    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+    filtered_dates = daily_returns[mask].index
+
+    # Initialize tracking
+    current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}  # Start defensive
+    results = []
+    rebalance_set = set(rebalance_dates)
+    tc_bps = config.TRANSACTION_COST_BPS / 10000
+
+    current_gem_signal = "SHY"
+    current_hy_regime = "NORMAL"
+
+    for date in filtered_dates:
+        # Check if rebalance day
+        if date in rebalance_set:
+            # Compute signals
+            gem_sig = signals_mod.compute_gem_signal(prices, date)
+
+            # HY overlay only available after HY OAS data begins (1997)
+            hy_data_available = (
+                len(hy_spread) > 0
+                and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+            )
+            if hy_data_available:
+                hy_reg = signals_mod.compute_hy_regime(hy_spread, date)
+            else:
+                # Pre-HY data: assume TIGHT (no overlay effect)
+                hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
+
+            current_gem_signal = gem_sig.get("gem_signal", "SHY") or "SHY"
+            current_hy_regime = hy_reg.get("regime", "NORMAL") or "NORMAL"
+
+            if use_floor:
+                target_weights = portfolio_mod.construct_portfolio_floor(gem_sig, hy_reg)
+            elif use_hy_overlay:
+                target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
+            else:
+                # Pure GEM: ignore HY regime
+                pure_hy = {"regime": "TIGHT", "fast_widen_override": False}
+                target_weights = portfolio_mod.construct_portfolio(gem_sig, pure_hy)
+
+            # Compute transaction costs
+            tc = 0.0
+            for ticker in config.ALL_TICKERS:
+                old_w = current_weights.get(ticker, 0.0)
+                new_w = target_weights.get(ticker, 0.0)
+                if abs(new_w - old_w) > 1e-6:
+                    tc += tc_bps  # Flat cost per changed position
+
+            current_weights = target_weights
+
+        # Compute daily portfolio return
+        day_ret = sum(
+            current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
+            for t in config.ALL_TICKERS
+            if t in daily_returns.columns
+        )
+
+        # Subtract transaction cost on rebalance day
+        if date in rebalance_set:
+            day_ret -= tc
+
+        results.append({
+            "date": date,
+            "daily_return": day_ret,
+            "gem_signal": current_gem_signal,
+            "hy_regime": current_hy_regime,
+            "weights": json.dumps({k: round(v, 4) for k, v in current_weights.items() if v > 0}),
+        })
+
+    result = pd.DataFrame(results).set_index("date")
+    result["cumulative"] = (1 + result["daily_return"]).cumprod()
+    if use_floor:
+        result["strategy"] = "gem_floor"
+    elif use_hy_overlay:
+        result["strategy"] = "gem_hy"
+    else:
+        result["strategy"] = "gem_pure"
+    return result
+
+
+def run_all_strategies(
+    start_date: str = None,
+    end_date: str = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Run all four strategies and return results dict.
+
+    Returns:
+        {"gem_hy": df, "gem_pure": df, "sixty_forty": df, "buy_hold": df}
+    """
+    strategies = ["gem_hy", "gem_pure", "gem_floor", "sixty_forty", "buy_hold"]
+    results = {}
+
+    for s in strategies:
+        print(f"Running backtest: {s}...")
+        results[s] = run_backtest(start_date, end_date, strategy=s)
+        print(f"  Done. {len(results[s])} trading days.")
+
+    return results
+
+
+if __name__ == "__main__":
+    print("Running full backtest suite...\n")
+    results = run_all_strategies()
+
+    print("\n=== Strategy Summary ===")
+    print(f"  {'Strategy':<12s}  {'Return':>8s}  {'CAGR':>8s}  {'Max DD':>8s}  {'Ann Vol':>8s}")
+    print(f"  {'─' * 48}")
+    for name, df in results.items():
+        final = df["cumulative"].iloc[-1]
+        years = len(df) / 252
+        cagr = (final ** (1 / years)) - 1
+        ann_vol = df["daily_return"].std() * np.sqrt(252)
+        rolling_max = df["cumulative"].cummax()
+        max_dd = ((df["cumulative"] - rolling_max) / rolling_max).min()
+        print(f"  {name:<12s}  {final:>7.2f}x  {cagr:>+7.1%}  {max_dd:>+7.1%}  {ann_vol:>7.1%}")

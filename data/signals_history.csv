@@ -1,0 +1,3 @@
+date,gem_signal,spy_12m_return,efa_12m_return,bil_12m_return,relative_winner,absolute_pass,hy_spread_current,hy_spread_3m_ago,hy_spread_change_3m,hy_regime,hy_roc_class,fast_widen_override,t10y2y,yc_status
+2026-03-13,SPY,0.215167,0.213418,0.040363,SPY,True,3.2,2.9,0.3,TIGHT,STABLE,False,0.55,NORMAL
+2026-03-13,SPY,0.215167,0.213418,0.040363,SPY,True,3.2,2.9,0.3,TIGHT,STABLE,False,0.55,NORMAL
