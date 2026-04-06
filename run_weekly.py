@@ -23,8 +23,13 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
     """Build the plain English summary (mirrors dashboard logic)."""
     gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
-    spread = hy.get("hy_spread_current", 0)
-    spread_change = hy.get("hy_spread_change_3m", 0)
+    regime_primary = hy.get("regime_primary", "N/A")
+    ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
+    ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
+    b_oas = hy.get("hy_b_current", 0) or 0
+    b_pctl = hy.get("hy_b_percentile", 0) or 0
+    b_change = hy.get("hy_b_change_3m", 0) or 0
+    spread = hy.get("hy_spread_current", 0) or 0
     override = hy.get("fast_widen_override", False)
     spy_ret = gem.get("spy_12m_return", 0)
     efa_ret = gem.get("efa_12m_return", 0) or 0
@@ -53,29 +58,41 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
             "Momentum says step aside into short-term Treasuries."
         )
 
-    # Regime explanation
+    # Regime explanation (dual-signal)
     regime_descriptions = {
-        "TIGHT": f"Credit spreads are tight at {spread:.0f} bps (below 350). No signs of stress.",
-        "NORMAL": f"Credit spreads are normal at {spread:.0f} bps (350-500 range). Typical risk pricing.",
-        "STRESSED": f"Credit spreads are elevated at {spread:.0f} bps (500-700 range). The model reduces equity exposure.",
-        "CRISIS": f"Credit spreads are at crisis levels: {spread:.0f} bps (above 700). The model goes heavily defensive.",
+        "TIGHT": (
+            f"CCC-BB spread at {ccc_bb:.0f} bps ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at {b_oas:.0f} bps ({b_pctl:.0f}th pctl). No signs of stress."
+        ),
+        "NORMAL": (
+            f"CCC-BB spread at {ccc_bb:.0f} bps ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at {b_oas:.0f} bps ({b_pctl:.0f}th pctl). Typical risk pricing."
+        ),
+        "STRESSED": (
+            f"CCC-BB spread at {ccc_bb:.0f} bps ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at {b_oas:.0f} bps ({b_pctl:.0f}th pctl). Elevated stress — model reduces equity."
+        ),
+        "CRISIS": (
+            f"CCC-BB spread at {ccc_bb:.0f} bps ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at {b_oas:.0f} bps ({b_pctl:.0f}th pctl). Crisis-level stress."
+        ),
     }
-    regime_english = regime_descriptions.get(regime, f"HY regime: {regime} ({spread:.0f} bps)")
+    regime_english = regime_descriptions.get(regime, f"HY regime: {regime}")
 
-    # Rate of change
+    # Rate of change (keyed off Single-B OAS)
     if override:
         roc_english = (
-            f"Spreads widened {spread_change:+.0f} bps in 3 months, triggering the "
+            f"Single-B OAS widened {b_change:+.0f} bps in 3 months, triggering the "
             "WIDENING_FAST override. The model forces 100% Treasuries."
         )
-    elif spread_change > 50:
-        roc_english = f"Spreads widened {spread_change:+.0f} bps over 3 months (WIDENING). Override triggers at +100 bps."
-    elif spread_change > 0:
-        roc_english = f"Spreads widened {spread_change:+.0f} bps over 3 months. Override triggers at +100 bps."
-    elif spread_change > -50:
-        roc_english = f"Spreads moved {spread_change:+.0f} bps over 3 months."
+    elif b_change > 50:
+        roc_english = f"Single-B OAS widened {b_change:+.0f} bps over 3 months (WIDENING). Override triggers at +100 bps."
+    elif b_change > 0:
+        roc_english = f"Single-B OAS widened {b_change:+.0f} bps over 3 months. Override triggers at +100 bps."
+    elif b_change > -50:
+        roc_english = f"Single-B OAS moved {b_change:+.0f} bps over 3 months."
     else:
-        roc_english = f"Spreads tightened {spread_change:+.0f} bps over 3 months (TIGHTENING)."
+        roc_english = f"Single-B OAS tightened {b_change:+.0f} bps over 3 months (TIGHTENING)."
 
     # Conviction
     margin = abs(spy_ret - efa_ret)
@@ -150,10 +167,11 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
         "CREDIT CONDITIONS (HY REGIME)",
         regime_english,
         "",
-        f"  HY OAS spread:   {spread:.0f} bps",
-        f"  3-month change:  {spread_change:+.0f} bps",
-        f"  Regime:          {regime}",
-        f"  Override:        {'ACTIVE' if override else 'Inactive'}",
+        f"  CCC-BB spread:     {ccc_bb:.0f} bps (pctl: {ccc_bb_pctl:.0f})",
+        f"  Single-B OAS:      {b_oas:.0f} bps (pctl: {b_pctl:.0f})",
+        f"  Single-B 3M chg:   {b_change:+.0f} bps",
+        f"  Regime:            {regime} (primary: {regime_primary})",
+        f"  Override:          {'ACTIVE' if override else 'Inactive'}",
         "",
         "SPREAD VELOCITY",
         roc_english,
@@ -185,6 +203,8 @@ def run():
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
     except Exception as e:
         print(f"ERROR: Data fetch failed: {e}")
         sys.exit(1)
@@ -193,7 +213,10 @@ def run():
     as_of = prices.index[-1]
     as_of_str = as_of.strftime("%Y-%m-%d")
 
-    all_signals = signals_mod.compute_all_signals(prices, hy_spread, as_of)
+    all_signals = signals_mod.compute_all_signals(
+        prices, hy_spread, as_of,
+        ccc_bb_spread=ccc_bb_spread, hy_b_spread=hy_b_spread,
+    )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
     yc = all_signals["yield_curve"]

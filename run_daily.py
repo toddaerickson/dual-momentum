@@ -28,6 +28,8 @@ def run():
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
     except Exception as e:
         print(f"\n*** ERROR: Data fetch failed: {e} ***")
         sys.exit(1)
@@ -37,7 +39,10 @@ def run():
     as_of_str = as_of.strftime("%Y-%m-%d")
 
     # 3. Compute signals
-    all_signals = signals_mod.compute_all_signals(prices, hy_spread, as_of)
+    all_signals = signals_mod.compute_all_signals(
+        prices, hy_spread, as_of,
+        ccc_bb_spread=ccc_bb_spread, hy_b_spread=hy_b_spread,
+    )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
     yc = all_signals["yield_curve"]
@@ -61,13 +66,19 @@ def run():
     print(f"    Abs Pass:    {'YES' if gem['absolute_pass'] else 'NO'}")
 
     regime = hy.get("regime", "N/A")
-    spread = hy.get("hy_spread_current", 0)
-    change = hy.get("hy_spread_change_3m", 0)
+    regime_primary = hy.get("regime_primary", "N/A")
+    ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
+    ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
+    b_oas = hy.get("hy_b_current", 0) or 0
+    b_pctl = hy.get("hy_b_percentile", 0) or 0
+    b_change = hy.get("hy_b_change_3m", 0) or 0
     roc = hy.get("rate_of_change", "N/A")
     override = hy.get("fast_widen_override", False)
 
-    print(f"\n  HY Regime:     {regime} ({spread:.0f} bps)")
-    print(f"    3M Change:   {change:+.0f} bps ({roc})")
+    print(f"\n  HY Regime:     {regime} (primary: {regime_primary})")
+    print(f"    CCC-BB:      {ccc_bb:.0f} bps (pctl: {ccc_bb_pctl:.0f})")
+    print(f"    Single-B:    {b_oas:.0f} bps (pctl: {b_pctl:.0f})")
+    print(f"    B 3M Change: {b_change:+.0f} bps ({roc})")
     print(f"    Override:    {'YES ***' if override else 'NO'}")
 
     yc_spread = yc.get("t10y2y", "N/A")
