@@ -69,6 +69,32 @@ def load_portfolio_history():
 # ──────────────────────────────────────────────
 st.sidebar.header("Controls")
 
+# FRED API Key input — checks env var, Streamlit secrets, then sidebar input
+if not config.FRED_API_KEY:
+    # Try Streamlit secrets (set via .streamlit/secrets.toml or Streamlit Cloud)
+    _secrets_key = st.secrets.get("FRED_API_KEY", "") if hasattr(st, "secrets") else ""
+    if _secrets_key:
+        config.FRED_API_KEY = _secrets_key
+        import os
+        os.environ["FRED_API_KEY"] = _secrets_key
+
+if not config.FRED_API_KEY:
+    st.sidebar.warning("FRED API key not set")
+    _input_key = st.sidebar.text_input(
+        "FRED API Key",
+        type="password",
+        help="Get a free key at https://fred.stlouisfed.org/docs/api/fred/",
+    )
+    if _input_key:
+        config.FRED_API_KEY = _input_key
+        import os
+        os.environ["FRED_API_KEY"] = _input_key
+        st.cache_data.clear()
+        st.rerun()
+    else:
+        st.sidebar.info("Enter your FRED API key to load data.")
+        st.stop()
+
 if st.sidebar.button("Refresh Data", type="primary"):
     st.cache_data.clear()
     st.rerun()
