@@ -68,7 +68,10 @@ EFA_AVAILABLE_FROM = "2001-08-14"
 # FRED Series
 # ──────────────────────────────────────────────
 FRED_SERIES = {
-    "HY_OAS": "BAMLH0A0HYM2",       # ICE BofA US HY Index OAS
+    "HY_OAS": "BAMLH0A0HYM2",       # ICE BofA US HY Index OAS (legacy, kept for charting)
+    "HY_CCC": "BAMLH0A3HYC",        # ICE BofA CCC & Lower OAS
+    "HY_BB": "BAMLH0A1HYBB",        # ICE BofA BB OAS
+    "HY_B": "BAMLH0A2HYB",          # ICE BofA Single-B OAS
     "GS10": "GS10",                   # 10-Year Treasury rate
     "T10Y2Y": "T10Y2Y",              # 10Y minus 2Y spread (monitoring only)
     "DFF": "DFF",                     # Fed Funds effective rate
@@ -82,8 +85,28 @@ FRED_SERIES = {
 GEM_LOOKBACK_MONTHS = 12             # Trailing return period for momentum
 
 # ──────────────────────────────────────────────
-# HY Spread Regime Thresholds (basis points)
+# HY Spread Regime: Dual-Signal Classifier
 # ──────────────────────────────────────────────
+# Primary signal: CCC-BB spread (BAMLH0A3HYC minus BAMLH0A1HYBB)
+#   Percentile ranks on an expanding window avoid fixed-bps drift.
+# Secondary signal: Single-B OAS (BAMLH0A2HYB) for confirmation.
+
+# CCC-BB spread percentile → regime (primary)
+HY_CCC_BB_PERCENTILE_THRESHOLDS = {
+    "TIGHT":    25,     # percentile < 25
+    "NORMAL":   60,     # 25 <= percentile < 60
+    "STRESSED": 85,     # 60 <= percentile < 85
+    # CRISIS: percentile >= 85 (implicit)
+}
+
+# Single-B OAS percentile → confirmation regime (secondary)
+# Used to escalate (never de-escalate) the primary regime by one step.
+HY_B_PERCENTILE_THRESHOLDS = {
+    "ELEVATED": 75,     # Single-B OAS >= 75th percentile → escalate primary by 1
+    "CRISIS":   90,     # Single-B OAS >= 90th percentile → escalate to at least STRESSED
+}
+
+# Legacy fixed-bps thresholds (kept for dashboard charting of composite HY OAS)
 HY_REGIME_THRESHOLDS = {
     "TIGHT":    350,    # spread < 350 bps
     "NORMAL":   500,    # 350 <= spread < 500 bps
@@ -91,9 +114,9 @@ HY_REGIME_THRESHOLDS = {
     # CRISIS: spread >= 700 bps (implicit)
 }
 
-# Rate of change thresholds (3-month change in bps)
+# Rate of change thresholds — keyed off Single-B OAS (3-month change in bps)
 HY_ROC_THRESHOLDS = {
-    "WIDENING_FAST":  100,   # 3-month change > +100 bps → override
+    "WIDENING_FAST":  100,   # 3-month Single-B OAS change > +100 bps → override
     "WIDENING":        50,   # 3-month change > +50 bps
     # STABLE: between -50 and +50
     "TIGHTENING":     -50,   # 3-month change < -50 bps

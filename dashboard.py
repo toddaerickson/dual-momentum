@@ -88,13 +88,18 @@ if view == "Current Signals":
         all_data = load_data()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
     except Exception as e:
         st.error(f"Data fetch failed: {e}")
         st.info("Ensure FRED_API_KEY is set in your environment.")
         st.stop()
 
     as_of = prices.index[-1]
-    all_signals = signals_mod.compute_all_signals(prices, hy_spread, as_of)
+    all_signals = signals_mod.compute_all_signals(
+        prices, hy_spread, as_of,
+        ccc_bb_spread=ccc_bb_spread, hy_b_spread=hy_b_spread,
+    )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
     yc = all_signals["yield_curve"]
@@ -113,11 +118,11 @@ if view == "Current Signals":
     col2.metric(
         "HY Regime",
         hy.get("regime", "N/A"),
-        f"{hy.get('hy_spread_current', 0):.0f} bps",
+        f"CCC-BB pctl: {hy.get('ccc_bb_percentile', 0):.0f}",
     )
     col3.metric(
-        "HY 3M Change",
-        f"{hy.get('hy_spread_change_3m', 0):+.0f} bps",
+        "Single-B 3M Δ",
+        f"{hy.get('hy_b_change_3m', 0) or 0:+.0f} bps",
         hy.get("rate_of_change", ""),
     )
     override = hy.get("fast_widen_override", False)
@@ -128,8 +133,13 @@ if view == "Current Signals":
     # ── Plain English Summary ──
     gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
-    spread = hy.get("hy_spread_current", 0)
-    spread_change = hy.get("hy_spread_change_3m", 0)
+    regime_primary = hy.get("regime_primary", "N/A")
+    ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
+    ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
+    b_oas = hy.get("hy_b_current", 0) or 0
+    b_pctl = hy.get("hy_b_percentile", 0) or 0
+    b_change = hy.get("hy_b_change_3m", 0) or 0
+    spread = hy.get("hy_spread_current", 0) or 0
     override = hy.get("fast_widen_override", False)
     spy_ret = gem.get("spy_12m_return", 0)
     efa_ret = gem.get("efa_12m_return", 0)
@@ -159,48 +169,48 @@ if view == "Current Signals":
             "Momentum says step aside into short-term Treasuries until equities recover."
         )
 
-    # Regime explanation
+    # Regime explanation (dual-signal)
     regime_descriptions = {
         "TIGHT": (
-            f"Credit spreads are **tight at {spread:.0f} bps** — well below 350. "
-            "Bond markets are calm and confident. No signs of stress. "
-            "This is a green light for risk assets."
+            f"CCC-BB spread is **{ccc_bb:.0f} bps** ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at **{b_oas:.0f} bps** ({b_pctl:.0f}th pctl). "
+            "Risk appetite is healthy. Green light for risk assets."
         ),
         "NORMAL": (
-            f"Credit spreads are **normal at {spread:.0f} bps** (350-500 range). "
-            "Markets are functioning normally with typical risk pricing. "
-            "No reason to reduce exposure."
+            f"CCC-BB spread is **{ccc_bb:.0f} bps** ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at **{b_oas:.0f} bps** ({b_pctl:.0f}th pctl). "
+            "Normal risk pricing. No reason to reduce exposure."
         ),
         "STRESSED": (
-            f"Credit spreads are **elevated at {spread:.0f} bps** (500-700 range). "
-            "The bond market is signaling concern. The model reduces equity exposure "
-            "and adds Treasuries as a cushion."
+            f"CCC-BB spread is **{ccc_bb:.0f} bps** ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at **{b_oas:.0f} bps** ({b_pctl:.0f}th pctl). "
+            "Elevated stress — the model reduces equity and adds Treasuries."
         ),
         "CRISIS": (
-            f"Credit spreads are **at crisis levels: {spread:.0f} bps** (above 700). "
-            "This has only happened during severe events like 2008 and early 2020. "
-            "The model goes heavily defensive and adds fallen angel bonds (ANGL) "
-            "to capture the eventual recovery in credit."
+            f"CCC-BB spread is **{ccc_bb:.0f} bps** ({ccc_bb_pctl:.0f}th percentile), "
+            f"Single-B OAS at **{b_oas:.0f} bps** ({b_pctl:.0f}th pctl). "
+            "Crisis-level stress. The model goes heavily defensive with ANGL "
+            "to capture eventual credit recovery."
         ),
     }
     regime_english = regime_descriptions.get(regime, "")
 
-    # Rate of change
+    # Rate of change (keyed off Single-B OAS)
     if override:
         roc_english = (
-            f"Spreads widened **{spread_change:+.0f} bps in 3 months**, triggering the "
+            f"Single-B OAS widened **{b_change:+.0f} bps in 3 months**, triggering the "
             "WIDENING_FAST override (threshold: +100 bps). The model forces 100% Treasuries."
         )
-    elif spread_change > 100:
-        roc_english = f"Spreads widened **{spread_change:+.0f} bps over 3 months**. Override threshold is +100 bps."
-    elif spread_change > 50:
-        roc_english = f"Spreads widened **{spread_change:+.0f} bps over 3 months** (WIDENING). Override triggers at +100 bps."
-    elif spread_change > 0:
-        roc_english = f"Spreads widened **{spread_change:+.0f} bps over 3 months**. Override triggers at +100 bps."
-    elif spread_change > -50:
-        roc_english = f"Spreads moved **{spread_change:+.0f} bps over 3 months**."
+    elif b_change > 100:
+        roc_english = f"Single-B OAS widened **{b_change:+.0f} bps over 3 months**. Override threshold is +100 bps."
+    elif b_change > 50:
+        roc_english = f"Single-B OAS widened **{b_change:+.0f} bps over 3 months** (WIDENING). Override triggers at +100 bps."
+    elif b_change > 0:
+        roc_english = f"Single-B OAS widened **{b_change:+.0f} bps over 3 months**. Override triggers at +100 bps."
+    elif b_change > -50:
+        roc_english = f"Single-B OAS moved **{b_change:+.0f} bps over 3 months**."
     else:
-        roc_english = f"Spreads tightened **{spread_change:+.0f} bps over 3 months** (TIGHTENING)."
+        roc_english = f"Single-B OAS tightened **{b_change:+.0f} bps over 3 months** (TIGHTENING)."
 
     # Conviction assessment
     margin = abs(spy_ret - efa_ret)
@@ -409,7 +419,7 @@ elif view == "Signal History":
             ))
 
         fig_hy.update_layout(
-            title="HY OAS Spread (bps) + Regime",
+            title="Composite HY OAS Spread (bps) + Legacy Regime Bands",
             yaxis_title="OAS (bps)",
             yaxis=dict(range=[y_lower, y_upper]),
             height=450,
@@ -979,6 +989,8 @@ elif view == "Parameter Sensitivity":
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
         daily_returns = prices.pct_change().fillna(0)
 
         start_date = config.BACKTEST_START
@@ -999,9 +1011,11 @@ elif view == "Parameter Sensitivity":
             for date in daily_returns[mask].index:
                 if date in rebalance_dates:
                     gem_sig = signals_mod.compute_gem_signal(prices, date, lookback_months=lb)
-                    hy_available = len(hy_spread) > 0 and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+                    hy_available = (len(ccc_bb_spread) > 0 and len(hy_b_spread) > 0
+                                    and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM))
                     if hy_available:
-                        hy_reg = signals_mod.compute_hy_regime(hy_spread, date)
+                        hy_reg = signals_mod.compute_hy_regime(
+                            ccc_bb_spread, hy_b_spread, date, hy_spread=hy_spread)
                     else:
                         hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
 
@@ -1070,16 +1084,17 @@ elif view == "Parameter Sensitivity":
     st.caption("* = current setting")
 
     # ── HY Threshold Sweep ──
-    st.markdown("#### HY Regime Thresholds")
-    st.caption("Current: TIGHT < 350, NORMAL < 500, STRESSED < 700. Testing tighter and wider bands.")
+    st.markdown("#### HY Regime Percentile Thresholds")
+    st.caption("Current: TIGHT < 25th, NORMAL < 60th, STRESSED < 85th pctl of CCC-BB spread. Testing tighter and wider bands.")
 
     @st.cache_data(ttl=3600)
     def run_threshold_sweep():
-        """Run gem_hy backtest with different HY threshold sets."""
-        import copy
+        """Run gem_hy backtest with different CCC-BB percentile threshold sets."""
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
         daily_returns = prices.pct_change().fillna(0)
 
         start_date = config.BACKTEST_START
@@ -1091,14 +1106,14 @@ elif view == "Parameter Sensitivity":
         rebalance_dates = set(month_ends)
 
         threshold_sets = {
-            "Tight (250/400/600)": {"TIGHT": 250, "NORMAL": 400, "STRESSED": 600},
-            "Current (350/500/700)": {"TIGHT": 350, "NORMAL": 500, "STRESSED": 700},
-            "Wide (450/600/800)": {"TIGHT": 450, "NORMAL": 600, "STRESSED": 800},
-            "Very Wide (500/700/900)": {"TIGHT": 500, "NORMAL": 700, "STRESSED": 900},
+            "Tight (15/50/75)": {"TIGHT": 15, "NORMAL": 50, "STRESSED": 75},
+            "Current (25/60/85)": {"TIGHT": 25, "NORMAL": 60, "STRESSED": 85},
+            "Wide (35/70/90)": {"TIGHT": 35, "NORMAL": 70, "STRESSED": 90},
+            "Very Wide (40/75/95)": {"TIGHT": 40, "NORMAL": 75, "STRESSED": 95},
         }
 
         sweep_results = {}
-        for label, hy_thresholds in threshold_sets.items():
+        for label, pctl_thresholds in threshold_sets.items():
             current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
             results_list = []
             tc_bps = config.TRANSACTION_COST_BPS / 10000
@@ -1107,30 +1122,30 @@ elif view == "Parameter Sensitivity":
                 if date in rebalance_dates:
                     gem_sig = signals_mod.compute_gem_signal(prices, date)
 
-                    hy_available = len(hy_spread) > 0 and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+                    hy_available = (len(ccc_bb_spread) > 0 and len(hy_b_spread) > 0
+                                    and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM))
                     if hy_available:
-                        # Compute regime with custom thresholds
                         as_of = pd.Timestamp(date)
-                        available = hy_spread[hy_spread.index <= as_of]
-                        if len(available) > 0:
-                            current_spread = float(available.iloc[-1])
-                            roc_start = as_of - pd.DateOffset(months=3)
-                            available_past = hy_spread[hy_spread.index <= roc_start]
-                            if len(available_past) > 0:
-                                spread_change = current_spread - float(available_past.iloc[-1])
-                            else:
-                                spread_change = 0
+                        # Compute CCC-BB percentile rank on expanding window
+                        ccc_bb_avail = ccc_bb_spread[ccc_bb_spread.index <= as_of].dropna()
+                        b_avail = hy_b_spread[hy_b_spread.index <= as_of].dropna()
+                        if len(ccc_bb_avail) >= 2 and len(b_avail) >= 2:
+                            ccc_bb_pctl = (ccc_bb_avail < ccc_bb_avail.iloc[-1]).sum() / len(ccc_bb_avail) * 100
 
-                            if current_spread < hy_thresholds["TIGHT"]:
+                            if ccc_bb_pctl < pctl_thresholds["TIGHT"]:
                                 regime = "TIGHT"
-                            elif current_spread < hy_thresholds["NORMAL"]:
+                            elif ccc_bb_pctl < pctl_thresholds["NORMAL"]:
                                 regime = "NORMAL"
-                            elif current_spread < hy_thresholds["STRESSED"]:
+                            elif ccc_bb_pctl < pctl_thresholds["STRESSED"]:
                                 regime = "STRESSED"
                             else:
                                 regime = "CRISIS"
 
-                            fast_widen = spread_change > config.HY_ROC_THRESHOLDS["WIDENING_FAST"]
+                            # Single-B ROC for WIDENING_FAST
+                            roc_start = as_of - pd.DateOffset(months=3)
+                            b_past = hy_b_spread[hy_b_spread.index <= roc_start]
+                            b_change = float(b_avail.iloc[-1]) - float(b_past.iloc[-1]) if len(b_past) > 0 else 0
+                            fast_widen = b_change > config.HY_ROC_THRESHOLDS["WIDENING_FAST"]
                             hy_reg = {"regime": regime, "fast_widen_override": fast_widen}
                         else:
                             hy_reg = {"regime": "TIGHT", "fast_widen_override": False}

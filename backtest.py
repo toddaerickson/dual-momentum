@@ -71,6 +71,8 @@ def run_backtest(
     fetch_start = (pd.Timestamp(start_date) - pd.DateOffset(months=15)).strftime("%Y-%m-%d")
     prices = data_mod.get_etf_prices(start_date=fetch_start, end_date=end_date)
     hy_spread = data_mod.get_hy_spread(start_date=fetch_start)
+    ccc_bb_spread = data_mod.get_ccc_bb_spread(start_date=fetch_start)
+    hy_b_spread = data_mod.get_hy_b_spread(start_date=fetch_start)
     daily_returns = _compute_daily_returns(prices)
 
     if end_date is None:
@@ -84,13 +86,16 @@ def run_backtest(
     elif strategy == "sixty_forty":
         return _run_sixty_forty(prices, daily_returns, rebalance_dates, start_date, end_date)
     elif strategy == "gem_pure":
-        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
+                        hy_b_spread, rebalance_dates,
                         start_date, end_date, use_hy_overlay=False)
     elif strategy == "gem_hy":
-        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
+                        hy_b_spread, rebalance_dates,
                         start_date, end_date, use_hy_overlay=True)
     elif strategy == "gem_floor":
-        return _run_gem(prices, daily_returns, hy_spread, rebalance_dates,
+        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
+                        hy_b_spread, rebalance_dates,
                         start_date, end_date, use_hy_overlay=True, use_floor=True)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
@@ -151,6 +156,8 @@ def _run_gem(
     prices: pd.DataFrame,
     daily_returns: pd.DataFrame,
     hy_spread: pd.Series,
+    ccc_bb_spread: pd.Series,
+    hy_b_spread: pd.Series,
     rebalance_dates: list,
     start_date: str,
     end_date: str,
@@ -183,11 +190,14 @@ def _run_gem(
 
             # HY overlay only available after HY OAS data begins (1997)
             hy_data_available = (
-                len(hy_spread) > 0
+                len(ccc_bb_spread) > 0
+                and len(hy_b_spread) > 0
                 and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
             )
             if hy_data_available:
-                hy_reg = signals_mod.compute_hy_regime(hy_spread, date)
+                hy_reg = signals_mod.compute_hy_regime(
+                    ccc_bb_spread, hy_b_spread, date, hy_spread=hy_spread,
+                )
             else:
                 # Pre-HY data: assume TIGHT (no overlay effect)
                 hy_reg = {"regime": "TIGHT", "fast_widen_override": False}

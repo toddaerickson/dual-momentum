@@ -110,6 +110,41 @@ def get_hy_spread(start_date: str = "1996-01-01") -> pd.Series:
     return raw * 100  # percentage points → basis points
 
 
+def get_hy_ccc_spread(start_date: str = "1996-01-01") -> pd.Series:
+    """Fetch ICE BofA CCC & Lower OAS spread in basis points."""
+    raw = get_fred_series(config.FRED_SERIES["HY_CCC"], start_date)
+    return raw * 100
+
+
+def get_hy_bb_spread(start_date: str = "1996-01-01") -> pd.Series:
+    """Fetch ICE BofA BB OAS spread in basis points."""
+    raw = get_fred_series(config.FRED_SERIES["HY_BB"], start_date)
+    return raw * 100
+
+
+def get_hy_b_spread(start_date: str = "1996-01-01") -> pd.Series:
+    """Fetch ICE BofA Single-B OAS spread in basis points."""
+    raw = get_fred_series(config.FRED_SERIES["HY_B"], start_date)
+    return raw * 100
+
+
+def get_ccc_bb_spread(start_date: str = "1996-01-01") -> pd.Series:
+    """
+    Compute CCC-BB spread (CCC OAS minus BB OAS) in basis points.
+
+    This is the primary risk-appetite signal for the dual-signal classifier.
+    A wider CCC-BB spread indicates investors demanding more compensation
+    for the lowest-quality credits relative to BB, i.e. declining risk appetite.
+    """
+    ccc = get_hy_ccc_spread(start_date)
+    bb = get_hy_bb_spread(start_date)
+    # Align on common dates
+    combined = pd.concat([ccc, bb], axis=1, keys=["CCC", "BB"]).dropna()
+    spread = combined["CCC"] - combined["BB"]
+    spread.name = "CCC_BB_SPREAD"
+    return spread
+
+
 def get_tbill_rate(start_date: str = "1978-01-01") -> pd.Series:
     """Fetch 3-month T-bill rate from FRED (available from 1954)."""
     return get_fred_series(config.FRED_SERIES["DTB3"], start_date)
@@ -323,15 +358,20 @@ def fetch_all(start_date: str = "1978-01-01") -> dict:
     """
     Fetch all data needed by the model.
 
-    Returns dict with keys: 'prices', 'hy_spread', 'yield_curve'
+    Returns dict with keys: 'prices', 'hy_spread', 'ccc_bb_spread',
+    'hy_b_spread', 'yield_curve'
     """
     prices = get_etf_prices(start_date=start_date)
     hy_spread = get_hy_spread(start_date=start_date)
+    ccc_bb_spread = get_ccc_bb_spread(start_date=start_date)
+    hy_b_spread = get_hy_b_spread(start_date=start_date)
     yield_curve = get_yield_curve_spread(start_date=start_date)
 
     return {
         "prices": prices,
         "hy_spread": hy_spread,
+        "ccc_bb_spread": ccc_bb_spread,
+        "hy_b_spread": hy_b_spread,
         "yield_curve": yield_curve,
     }
 
@@ -342,4 +382,6 @@ if __name__ == "__main__":
     data = fetch_all()
     print(f"\nPrices shape: {data['prices'].shape}")
     print(f"HY spread: {len(data['hy_spread'])} obs, latest: {data['hy_spread'].iloc[-1]:.0f} bps")
+    print(f"CCC-BB spread: {len(data['ccc_bb_spread'])} obs, latest: {data['ccc_bb_spread'].iloc[-1]:.0f} bps")
+    print(f"Single-B OAS: {len(data['hy_b_spread'])} obs, latest: {data['hy_b_spread'].iloc[-1]:.0f} bps")
     print(f"Yield curve: {len(data['yield_curve'])} obs, latest: {data['yield_curve'].iloc[-1]:.2f}%")

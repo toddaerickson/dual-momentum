@@ -54,8 +54,13 @@ def generate_memo(
     """Generate markdown memo for the monthly rebalance."""
     gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
-    spread = hy.get("hy_spread_current", 0)
-    spread_change = hy.get("hy_spread_change_3m", 0)
+    regime_primary = hy.get("regime_primary", "N/A")
+    ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
+    ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
+    b_oas = hy.get("hy_b_current", 0) or 0
+    b_pctl = hy.get("hy_b_percentile", 0) or 0
+    b_change = hy.get("hy_b_change_3m", 0) or 0
+    spread = hy.get("hy_spread_current", 0) or 0
     override = hy.get("fast_widen_override", False)
 
     # Determine prior month values from state
@@ -82,8 +87,9 @@ def generate_memo(
         "| Signal | Value | Prior Month | Change |",
         "|---|---|---|---|",
         f"| GEM | {gem_signal} | {prior_gem} | {gem_changed} |",
-        f"| HY Spread | {spread:.0f} bps | {hy.get('hy_spread_3m_ago', '—')} bps (3mo ago) | {spread_change:+.0f} bps |",
-        f"| HY Regime | {regime} | {prior_regime} | {regime_changed} |",
+        f"| CCC-BB Spread | {ccc_bb:.0f} bps (pctl: {ccc_bb_pctl:.0f}) | — | — |",
+        f"| Single-B OAS | {b_oas:.0f} bps (pctl: {b_pctl:.0f}) | {hy.get('hy_b_3m_ago', '—')} bps (3mo ago) | {b_change:+.0f} bps |",
+        f"| HY Regime | {regime} (primary: {regime_primary}) | {prior_regime} | {regime_changed} |",
         f"| Override | {'YES' if override else 'NO'} | — | — |",
         f"| Yield Curve | {yc.get('t10y2y', 'N/A')}% ({yc.get('status', 'N/A')}) | — | monitoring only |",
         "",
@@ -123,8 +129,10 @@ def generate_memo(
         "## Decision Matrix State",
         "",
         f"- GEM signal: **{gem_signal}**",
-        f"- HY regime: **{regime}** ({spread:.0f} bps)",
-        f"- HY rate of change: {hy.get('rate_of_change', 'N/A')} ({spread_change:+.0f} bps over 3 months)",
+        f"- HY regime: **{regime}** (primary: {regime_primary})",
+        f"- CCC-BB spread: {ccc_bb:.0f} bps (percentile: {ccc_bb_pctl:.0f})",
+        f"- Single-B OAS: {b_oas:.0f} bps (percentile: {b_pctl:.0f})",
+        f"- Single-B rate of change: {hy.get('rate_of_change', 'N/A')} ({b_change:+.0f} bps over 3 months)",
         f"- WIDENING_FAST override: {'**ACTIVE**' if override else 'Inactive'}",
         "",
         "---",
@@ -153,6 +161,8 @@ def run(force: bool = False):
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
+        ccc_bb_spread = all_data["ccc_bb_spread"]
+        hy_b_spread = all_data["hy_b_spread"]
     except Exception as e:
         print(f"*** ERROR: Data fetch failed: {e} ***")
         sys.exit(1)
@@ -161,7 +171,10 @@ def run(force: bool = False):
     as_of = prices.index[-1]
     as_of_str = as_of.strftime("%Y-%m-%d")
 
-    all_signals = signals_mod.compute_all_signals(prices, hy_spread, as_of)
+    all_signals = signals_mod.compute_all_signals(
+        prices, hy_spread, as_of,
+        ccc_bb_spread=ccc_bb_spread, hy_b_spread=hy_b_spread,
+    )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
     yc = all_signals["yield_curve"]

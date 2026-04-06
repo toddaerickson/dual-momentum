@@ -217,7 +217,10 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
     # Full body
     gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
-    spread = hy.get("hy_spread_current", 0)
+    ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
+    ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
+    b_oas = hy.get("hy_b_current", 0) or 0
+    b_change = hy.get("hy_b_change_3m", 0) or 0
 
     body_lines = [
         "Signal Change Detected",
@@ -234,8 +237,8 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
         f"  SPY 12M:     {gem.get('spy_12m_return', 0):+.1%}",
         f"  EFA 12M:     {gem.get('efa_12m_return', 0):+.1%}",
         f"  BIL 12M:     {gem.get('bil_12m_return', 0):+.1%}",
-        f"  HY Regime:   {regime} ({spread:.0f} bps)",
-        f"  HY 3M Chg:   {hy.get('hy_spread_change_3m', 0):+.0f} bps",
+        f"  HY Regime:   {regime} (CCC-BB: {ccc_bb:.0f} bps, pctl: {ccc_bb_pctl:.0f})",
+        f"  Single-B:    {b_oas:.0f} bps, 3M chg: {b_change:+.0f} bps",
         f"  Override:    {'YES' if hy.get('fast_widen_override') else 'NO'}",
         "",
         "Target Portfolio:",
@@ -283,7 +286,7 @@ def format_rebalance_alert(
         "=" * 40,
         "",
         f"  GEM Signal:  {gem_signal}",
-        f"  HY Regime:   {regime} ({hy.get('hy_spread_current', 0):.0f} bps)",
+        f"  HY Regime:   {regime} (CCC-BB pctl: {hy.get('ccc_bb_percentile', 0) or 0:.0f})",
         "",
         "Target Allocation:",
     ]
