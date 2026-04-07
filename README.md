@@ -1,22 +1,29 @@
-# Dual Momentum + HY Spread Model Portfolio
+# Three-Stage TAA Model Portfolio
 
-A rules-based tactical asset allocation system that combines equity momentum with credit stress signals to produce a single monthly portfolio allocation. Fully mechanical, no discretion, no forecasting.
+A rules-based tactical asset allocation system with three independent stages: absolute momentum filter, cross-asset momentum ranking, and credit stress regime overlay. Fully mechanical, no discretion, no forecasting.
 
 ## What It Does
 
-Two independent signals run every month. Their intersection determines exactly how to allocate across four ETFs.
+Three stages run every month. Their combination determines how to allocate across nine ETFs.
 
-**Signal 1 -- Global Equity Momentum (GEM)**
+**Stage 1 -- GEM Absolute Momentum (Crash Avoidance)**
 
-Compares trailing 12-month total returns of US stocks (SPY) vs international stocks (EFA). The winner must also beat T-bills (BIL) as an absolute momentum filter. If neither equity market clears the hurdle, the model moves entirely to short-term Treasuries.
+Checks whether the best equity market (SPY or EFA) beats T-bills (BIL) over the trailing 12 months. If neither clears the hurdle, the model moves entirely to short-term Treasuries. This is a binary gate: pass or fail.
 
 | Condition | Output |
 |-----------|--------|
-| SPY beats EFA and both beat BIL | Hold SPY |
-| EFA beats SPY and both beat BIL | Hold EFA |
-| Neither beats BIL | Hold SHY (risk-off) |
+| Best equity return > BIL return | PASS -- proceed to Stage 2 |
+| Neither beats BIL | FAIL -- 100% SHY, stop |
 
-**Signal 2 -- Dual-Signal Credit Regime Classifier**
+**Stage 2 -- Cross-Asset Momentum Ranking (Asset Selection)**
+
+Ranks 6 risky assets (SPY, EFA, EEM, VNQ, DBC, GLD) by vol-adjusted 12-1 month momentum. Skips the most recent month to avoid short-term reversal (Jegadeesh & Titman, 1993). Normalizes to 10% target vol before ranking (Blitz & van Vliet, 2008).
+
+Assets are assigned to terciles: top 2 get 30% each, middle 2 get 20% each, bottom 2 get 0%. Hysteresis prevents rebalancing when rank changes by only 1 position (~30-40% turnover reduction).
+
+ANGL is excluded from ranking -- it only appears as a structural crisis allocation in Stage 3.
+
+**Stage 3 -- Dual-Signal Credit Regime Classifier (Risk Budget Sizing)**
 
 Uses two ICE BofA credit spread series from FRED to classify the credit environment:
 
@@ -40,27 +47,37 @@ The Single-B OAS acts as a confirmation signal. When it is also elevated (>= 75t
 
 **WIDENING_FAST override:** If Single-B OAS widens by more than 100 bps in 3 months, the model forces 100% Treasuries regardless of the regime classification. This is keyed off Single-B rather than the composite for the same composition-stability reasons.
 
-## Decision Matrix
+## Three-Stage Pipeline
 
-The two signals combine into target weights:
+| Stage | Signal | Output |
+|-------|--------|--------|
+| **Stage 1** | GEM absolute momentum (equity winner vs BIL) | PASS (proceed) or FAIL (100% SHY) |
+| **Stage 2** | 6-asset momentum ranking (vol-adjusted 12-1M) | Risky asset weights (sums to 1.0) |
+| **Stage 3** | HY regime (CCC-BB percentile + Single-B confirmation) | Risk budget sizing |
 
-|                    | GEM = SPY             | GEM = EFA             | GEM = SHY       |
-|--------------------|-----------------------|-----------------------|-----------------|
-| **TIGHT**          | 100% SPY              | 100% EFA              | 100% SHY        |
-| **NORMAL**         | 100% SPY              | 100% EFA              | 100% SHY        |
-| **STRESSED**       | 70% SPY / 30% SHY    | 70% EFA / 30% SHY    | 100% SHY        |
-| **CRISIS**         | 50% SPY / 30% SHY / 20% ANGL | 50% EFA / 30% SHY / 20% ANGL | 80% SHY / 20% ANGL |
-| **WIDENING_FAST**  | 100% SHY (override)   | 100% SHY (override)   | No change       |
+### Risk Budget by Regime
+
+| HY Regime | Risky Budget | SHY | ANGL | Effect |
+|-----------|-------------|-----|------|--------|
+| **TIGHT** | 100% | 0% | 0% | Full allocation to momentum-ranked assets |
+| **NORMAL** | 100% | 0% | 0% | Same as TIGHT |
+| **STRESSED** | 70% | 30% | 0% | Reduce risky, add Treasuries |
+| **CRISIS** | 50% | 30% | 20% | Heavily defensive + fallen angel recovery |
+| **WIDENING_FAST** | 0% | 100% | 0% | Override: 100% SHY regardless |
 
 ## ETF Universe
 
-| ETF  | Role                        | Duration |
-|------|-----------------------------|----------|
-| SPY  | US equity (S&P 500)         | N/A      |
-| EFA  | International developed     | N/A      |
-| SHY  | Defensive bond (1-3Y Treas) | ~1.9 yr  |
-| BIL  | T-bill proxy (hurdle only)  | ~0.1 yr  |
-| ANGL | Fallen angel HY bonds       | ~5.5 yr  |
+| ETF  | Role                        | Stage |
+|------|-----------------------------|-------|
+| SPY  | US equity (S&P 500)         | Ranked (Stage 2) |
+| EFA  | International developed     | Ranked (Stage 2) |
+| EEM  | Emerging markets            | Ranked (Stage 2) |
+| VNQ  | Real estate (REITs)         | Ranked (Stage 2) |
+| DBC  | Broad commodities           | Ranked (Stage 2) |
+| GLD  | Gold                        | Ranked (Stage 2) |
+| SHY  | Defensive bond (1-3Y Treas) | Structural (Stage 3) |
+| BIL  | T-bill proxy (hurdle only)  | Stage 1 hurdle |
+| ANGL | Fallen angel HY bonds       | Structural crisis only (Stage 3) |
 
 ## Quick Start
 
@@ -94,7 +111,7 @@ Interactive Streamlit dashboard with six views:
 
 | View | What You See |
 |------|-------------|
-| **Current Signals** | Live GEM signal, dual-signal HY regime (CCC-BB percentile + Single-B confirmation), target allocation, plain English interpretation |
+| **Current Signals** | Three-stage signals: GEM absolute momentum, momentum ranking table (terciles, scores, weights), HY regime, target allocation, plain English interpretation |
 | **Signal History** | Composite HY OAS time series with legacy regime bands, GEM signal timeline |
 | **SPY + Regimes** | SPY price history colored by HY regime and GEM signal |
 | **Backtest Performance** | Equity curves, drawdowns, annual returns, monthly heatmap, rolling Sharpe |
@@ -144,9 +161,11 @@ Windows users can use `run_weekly.bat` with Task Scheduler.
 dual-momentum/
 ├── config.py              # All constants, thresholds, FRED series, paths
 ├── data.py                # FRED + yfinance fetching with 12-hour cache
-├── signals.py             # GEM signal + dual-signal HY regime classifier
-├── portfolio.py           # Decision matrix -> target weights
-├── backtest.py            # Historical simulation engine (5 strategies)
+├── signals.py             # Three-stage signal computation (GEM + momentum + HY)
+├── momentum_rank.py       # Cross-asset 12-1 month momentum ranking module
+├── portfolio.py           # Legacy decision matrix + v2 delegation
+├── portfolio_v2.py        # Three-stage portfolio constructor
+├── backtest.py            # Historical simulation engine (6 strategies)
 ├── performance.py         # CAGR, Sharpe, drawdown, comparison tables
 ├── state.py               # Persistent CSV logging of signals and portfolio
 ├── notifications.py       # Email, Slack, SMS alert dispatcher
@@ -154,6 +173,7 @@ dual-momentum/
 ├── run_daily.py           # Daily signal check + alerts
 ├── run_monthly.py         # Monthly rebalance + memo generation
 ├── run_weekly.py          # Weekly summary email
+├── test_momentum.py       # Test harness for momentum ranking + portfolio_v2
 ├── requirements.txt
 ├── .github/workflows/     # GitHub Actions (daily + weekly)
 ├── data/
@@ -177,7 +197,8 @@ dual-momentum/
 
 | Strategy | Description |
 |----------|-------------|
-| `gem_hy` | Full model: GEM + dual-signal HY regime overlay |
+| `momentum_hy` | Full model: three-stage (GEM abs momentum + momentum ranking + HY regime) |
+| `gem_hy` | Legacy: GEM binary signal + dual-signal HY regime overlay |
 | `gem_pure` | GEM only, no HY overlay (control) |
 | `gem_floor` | GEM + HY overlay with 70% minimum equity floor |
 | `sixty_forty` | 60% SPY / 40% SHY, monthly rebalance (control) |

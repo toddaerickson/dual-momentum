@@ -243,9 +243,9 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
         "",
         "Target Portfolio:",
     ])
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in ["SPY", "EFA", "EEM", "VNQ", "DBC", "GLD", "SHY", "ANGL"]:
         w = target.get(ticker, 0)
-        if w > 0:
+        if w > 0.001:
             body_lines.append(f"  {ticker}: {w:.0%}")
 
     body = "\n".join(body_lines)
@@ -273,9 +273,9 @@ def format_rebalance_alert(
 
     # Build target string
     alloc_parts = []
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in ["SPY", "EFA", "EEM", "VNQ", "DBC", "GLD", "SHY", "ANGL"]:
         w = target_weights.get(ticker, 0)
-        if w > 0:
+        if w > 0.001:
             alloc_parts.append(f"{ticker} {w:.0%}")
     alloc_str = " / ".join(alloc_parts)
 
@@ -290,10 +290,10 @@ def format_rebalance_alert(
         "",
         "Target Allocation:",
     ]
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in ["SPY", "EFA", "EEM", "VNQ", "DBC", "GLD", "SHY", "ANGL"]:
         tw = target_weights.get(ticker, 0)
         pw = prior_weights.get(ticker, 0)
-        if tw > 0 or pw > 0:
+        if tw > 0.001 or pw > 0.001:
             change = tw - pw
             change_str = f" ({change:+.0%})" if abs(change) > 1e-6 else ""
             body_lines.append(f"  {ticker}: {tw:.0%}{change_str}")

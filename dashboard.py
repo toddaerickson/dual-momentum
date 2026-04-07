@@ -1,5 +1,5 @@
 """
-Streamlit Dashboard: Dual Momentum + HY Spread Model Portfolio
+Streamlit Dashboard: Three-Stage TAA Model Portfolio
 
 Run:
   streamlit run dashboard.py
@@ -17,6 +17,8 @@ import config
 import data as data_mod
 import signals as signals_mod
 import portfolio as portfolio_mod
+import portfolio_v2
+import momentum_rank
 import backtest
 import performance
 
@@ -24,12 +26,12 @@ import performance
 # Page Config
 # ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dual Momentum Dashboard",
+    page_title="Three-Stage TAA Dashboard",
     page_icon="📊",
     layout="wide",
 )
 
-st.title("Dual Momentum + HY Spread Model Portfolio")
+st.title("Three-Stage TAA Model Portfolio")
 
 
 # ──────────────────────────────────────────────
@@ -128,8 +130,10 @@ if view == "Current Signals":
     )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
+    mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
-    target = portfolio_mod.construct_portfolio(gem, hy)
+    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    target = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     st.subheader(f"Signals as of {as_of.strftime('%Y-%m-%d')}")
 
@@ -272,25 +276,31 @@ if view == "Current Signals":
 
     # Target portfolio in plain english
     alloc_parts = []
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in portfolio_v2.ALL_TICKERS:
         w = target.get(ticker, 0)
-        if w > 0:
+        if w > 0.001:
             alloc_parts.append(f"**{w:.0%} {ticker}**")
     alloc_str = " / ".join(alloc_parts)
 
-    ticker_names = {"SPY": "US stocks", "EFA": "international stocks", "SHY": "short-term Treasuries", "ANGL": "fallen angel bonds"}
+    ticker_names = {
+        "SPY": "US stocks", "EFA": "international stocks", "EEM": "emerging markets",
+        "VNQ": "REITs", "DBC": "commodities", "GLD": "gold",
+        "SHY": "short-term Treasuries", "ANGL": "fallen angel bonds",
+    }
     alloc_plain = ", ".join(
         f"{target[t]:.0%} in {ticker_names.get(t, t)}"
-        for t in ["SPY", "EFA", "SHY", "ANGL"] if target.get(t, 0) > 0
+        for t in portfolio_v2.ALL_TICKERS if target.get(t, 0) > 0.001
     )
 
     # Render the summary
     st.subheader("What This Means")
 
     st.markdown(f"""
-**Momentum Signal (GEM):** {gem_english}
+**Stage 1 — Absolute Momentum (GEM):** {gem_english}
 
-**Credit Conditions (HY Regime):** {regime_english}
+**Stage 2 — Momentum Ranking:** The model ranks 6 risky assets (SPY, EFA, EEM, VNQ, DBC, GLD) by vol-adjusted 12-1 month momentum and allocates to the top and middle terciles.
+
+**Stage 3 — Credit Conditions (HY Regime):** {regime_english}
 
 **Spread Velocity:** {roc_english}
 
@@ -303,18 +313,17 @@ if view == "Current Signals":
 
     st.divider()
 
-    # GEM detail + Target allocation side by side
-    left, right = st.columns(2)
+    # Three-column layout: GEM, Momentum Ranking, Target Portfolio
+    col_gem, col_mom, col_target = st.columns(3)
 
-    with left:
-        st.subheader("GEM Momentum Detail")
+    with col_gem:
+        st.subheader("Stage 1: GEM")
         gem_data = {
-            "Metric": ["SPY 12M Return", "EFA 12M Return", "BIL 12M Return", "Relative Winner", "Absolute Pass"],
+            "Metric": ["SPY 12M Return", "EFA 12M Return", "BIL 12M Return", "Absolute Pass"],
             "Value": [
                 f"{gem.get('spy_12m_return', 0):+.1%}",
                 f"{gem.get('efa_12m_return', 0):+.1%}",
                 f"{gem.get('bil_12m_return', 0):+.1%}",
-                gem.get("relative_winner", "N/A"),
                 "YES" if gem.get("absolute_pass") else "NO",
             ],
         }
@@ -324,12 +333,33 @@ if view == "Current Signals":
         yc_status = yc.get("status", "N/A")
         st.caption(f"Yield Curve: {yc_spread}% ({yc_status}) — monitoring only")
 
-    with right:
+    with col_mom:
+        st.subheader("Stage 2: Momentum")
+        mom_rows = []
+        for ticker in sorted(mom.ranks.keys(), key=lambda t: mom.ranks.get(t, 99)):
+            raw = mom.raw_momentum.get(ticker, np.nan)
+            raw_s = f"{raw:+.1%}" if not np.isnan(raw) else "N/A"
+            terc = mom.terciles.get(ticker, "N/A")
+            rw = mom.risky_weights.get(ticker, 0.0)
+            mom_rows.append({
+                "Ticker": ticker,
+                "12-1M": raw_s,
+                "Tercile": terc,
+                "Wt": f"{rw:.0%}",
+            })
+        st.table(pd.DataFrame(mom_rows).set_index("Ticker"))
+        st.caption(f"Metric: {mom.ranking_metric} | Assets: {mom.available_assets}")
+
+    with col_target:
         st.subheader("Target Portfolio")
         # Donut chart
-        tickers = [t for t in ["SPY", "EFA", "SHY", "ANGL"] if target.get(t, 0) > 0]
+        tickers = [t for t in portfolio_v2.ALL_TICKERS if target.get(t, 0) > 0.001]
         weights = [target[t] for t in tickers]
-        colors = {"SPY": "#2ecc71", "EFA": "#3498db", "SHY": "#f39c12", "ANGL": "#e74c3c"}
+        colors = {
+            "SPY": "#2ecc71", "EFA": "#3498db", "EEM": "#1abc9c",
+            "VNQ": "#8e44ad", "DBC": "#d35400", "GLD": "#f1c40f",
+            "SHY": "#f39c12", "ANGL": "#e74c3c",
+        }
 
         fig = go.Figure(
             data=[go.Pie(
@@ -657,6 +687,7 @@ elif view == "SPY + Regimes":
     st.subheader("Strategy Comparison")
     all_metrics = {}
     strategy_labels = {
+        "momentum_hy": "Momentum + HY (3-Stage)",
         "gem_hy": "GEM + HY Overlay",
         "gem_pure": "GEM Pure",
         "gem_floor": "GEM Floor (70%)",
@@ -700,6 +731,7 @@ elif view == "Backtest Performance":
     # Equity curves
     fig = go.Figure()
     strategy_colors = {
+        "momentum_hy": "#1abc9c",
         "gem_hy": "#2ecc71",
         "gem_pure": "#3498db",
         "gem_floor": "#9b59b6",
@@ -707,6 +739,7 @@ elif view == "Backtest Performance":
         "buy_hold": "#e74c3c",
     }
     strategy_labels = {
+        "momentum_hy": "Momentum + HY (3-Stage)",
         "gem_hy": "GEM + HY Overlay",
         "gem_pure": "GEM Pure",
         "gem_floor": "GEM Floor (70%)",
@@ -741,7 +774,7 @@ elif view == "Backtest Performance":
             x=dd.index, y=dd.values * 100,
             name=strategy_labels.get(name, name),
             line=dict(color=strategy_colors.get(name, "#95a5a6"), width=1.5),
-            fill="tozeroy" if name == "gem_hy" else None,
+            fill="tozeroy" if name == "momentum_hy" else None,
         ))
 
     fig_dd.update_layout(
@@ -807,8 +840,11 @@ elif view == "Backtest Performance":
     st.plotly_chart(fig_annual, use_container_width=True)
 
     # ── Monthly Returns Heatmap (gem_hy) ──
-    st.subheader("Monthly Returns Heatmap (GEM + HY Overlay)")
-    gem_hy_df = results["gem_hy"].copy()
+    # Use momentum_hy if available, else gem_hy
+    heatmap_strategy = "momentum_hy" if "momentum_hy" in results else "gem_hy"
+    heatmap_label = strategy_labels.get(heatmap_strategy, heatmap_strategy)
+    st.subheader(f"Monthly Returns Heatmap ({heatmap_label})")
+    gem_hy_df = results[heatmap_strategy].copy()
     gem_hy_df["year"] = gem_hy_df.index.year
     gem_hy_df["month"] = gem_hy_df.index.month
     monthly = gem_hy_df.groupby(["year", "month"])["daily_return"].apply(
@@ -920,10 +956,14 @@ elif view == "Allocation Over Time":
         weights_df = pd.DataFrame(weight_records).set_index("date").fillna(0)
 
     # Stacked area chart
-    ticker_colors = {"SPY": "#2ecc71", "EFA": "#3498db", "SHY": "#f39c12", "ANGL": "#e74c3c"}
+    ticker_colors = {
+        "SPY": "#2ecc71", "EFA": "#3498db", "EEM": "#1abc9c",
+        "VNQ": "#8e44ad", "DBC": "#d35400", "GLD": "#f1c40f",
+        "SHY": "#f39c12", "ANGL": "#e74c3c",
+    }
     fig = go.Figure()
 
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in portfolio_v2.ALL_TICKERS:
         if ticker in weights_df.columns:
             fig.add_trace(go.Scatter(
                 x=weights_df.index,
@@ -1256,7 +1296,7 @@ If performance is highly sensitive to a specific parameter, that's a fragility w
 # ──────────────────────────────────────────────
 st.divider()
 st.caption(
-    "Dual Momentum + HY Spread Model Portfolio. "
+    "Three-Stage TAA Model Portfolio: GEM Absolute Momentum + Cross-Asset Ranking + HY Regime. "
     "Signals are rules-based with no discretion. "
     "Past performance does not guarantee future results."
 )

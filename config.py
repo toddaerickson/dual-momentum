@@ -34,17 +34,28 @@ PORTFOLIO_HISTORY_FILE = DATA_DIR / "portfolio_history.csv"
 TICKERS = {
     "US_EQUITY": "SPY",
     "INTL_EQUITY": "EFA",
+    "EM_EQUITY": "EEM",         # Emerging markets equity
+    "REITS": "VNQ",             # Real estate investment trusts
+    "COMMODITIES": "DBC",       # Broad commodities
+    "GOLD": "GLD",              # Gold
     "DEFENSIVE_BOND": "SHY",    # Short-duration Treasuries (1-3 yr)
     "TBILL_PROXY": "BIL",       # T-bill proxy for absolute momentum hurdle
     "CRISIS_CREDIT": "ANGL",    # Fallen angel HY bonds
 }
 
-ALL_TICKERS = ["SPY", "EFA", "SHY", "BIL", "ANGL"]
+ALL_TICKERS = ["SPY", "EFA", "EEM", "VNQ", "DBC", "GLD", "SHY", "BIL", "ANGL"]
+
+# Risky tickers eligible for momentum ranking (ANGL excluded — structural only)
+RISKY_TICKERS = ["SPY", "EFA", "EEM", "VNQ", "DBC", "GLD"]
 
 # ETF inception dates (for backtest boundary handling)
 ETF_INCEPTION = {
     "SPY":  "1993-01-29",
     "EFA":  "2001-08-14",
+    "EEM":  "2003-04-11",
+    "VNQ":  "2004-09-29",
+    "GLD":  "2004-11-18",
+    "DBC":  "2006-02-03",
     "SHY":  "2002-07-22",
     "BIL":  "2007-05-25",
     "ANGL": "2012-04-10",
@@ -63,6 +74,9 @@ BACKTEST_SUBSTITUTIONS = {
 # EFA (MSCI EAFE) has no free proxy before inception.
 # Pre-2001: GEM runs absolute momentum only (SPY vs BIL), no relative comparison.
 EFA_AVAILABLE_FROM = "2001-08-14"
+
+# EEM, VNQ, DBC, GLD have no pre-inception proxies.
+# Momentum ranking gracefully excludes unavailable tickers per month.
 
 # ──────────────────────────────────────────────
 # FRED Series
@@ -181,6 +195,28 @@ ALLOCATION_MATRIX_FLOOR_DEFENSIVE = {
     ("SPY", "CRISIS"):   {"SPY": 0.7, "EFA": 0.0, "SHY": 0.1, "ANGL": 0.2},
     ("EFA", "CRISIS"):   {"SPY": 0.0, "EFA": 0.7, "SHY": 0.1, "ANGL": 0.2},
 }
+
+# ──────────────────────────────────────────────
+# Three-Stage Risk Budget (from portfolio_v2)
+# ──────────────────────────────────────────────
+# Stage 3: HY regime determines what fraction of the portfolio goes to risky assets
+REGIME_RISK_BUDGET = {
+    "TIGHT":    1.00,
+    "NORMAL":   1.00,
+    "STRESSED": 0.70,
+    "CRISIS":   0.50,
+}
+
+# SHY allocation per regime (what doesn't go to risky budget or ANGL)
+REGIME_SHY_ALLOCATION = {
+    "TIGHT":    0.00,
+    "NORMAL":   0.00,
+    "STRESSED": 0.30,
+    "CRISIS":   0.30,   # remaining 20% goes to ANGL
+}
+
+# Crisis structural allocation (Verdad fallen-angel thesis)
+CRISIS_ANGL_WEIGHT = 0.20
 
 # ──────────────────────────────────────────────
 # Backtest Parameters

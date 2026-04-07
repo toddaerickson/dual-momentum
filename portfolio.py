@@ -1,10 +1,14 @@
 """
 Portfolio Constructor: Signal → Target Weights
 
-Implements the decision matrix. Single function, no discretion.
+Legacy (two-signal) and v2 (three-stage) portfolio construction.
+
+Legacy: GEM binary signal + HY regime → decision matrix lookup.
+V2: GEM absolute momentum + momentum ranking + HY regime → three-stage pipeline.
 """
 
 import config
+import portfolio_v2
 
 
 def construct_portfolio(gem_signal: dict, hy_regime: dict) -> dict:
@@ -130,6 +134,41 @@ def portfolio_description(weights: dict) -> str:
         if w > 0:
             parts.append(f"{ticker}: {w:.0%}")
     return " / ".join(parts) if parts else "EMPTY"
+
+
+def construct_portfolio_v2(
+    gem_signal: dict,
+    hy_regime: dict,
+    momentum_signal,
+    rebalance_threshold: float = 0.02,
+    prior_weights: dict = None,
+) -> dict:
+    """
+    Three-stage portfolio construction (v2).
+
+    Delegates to portfolio_v2.construct_portfolio(). Returns weights dict
+    with '_metadata' key for decision reasoning.
+
+    Args:
+        gem_signal: dict from signals.compute_gem_signal()
+        hy_regime: dict from signals.compute_hy_regime()
+        momentum_signal: MomentumSignal from momentum_rank.py
+        rebalance_threshold: minimum weight delta to trigger trade (default 2%)
+        prior_weights: last month's portfolio weights (for threshold check)
+
+    Returns:
+        {ticker: weight} for all tickers, with '_metadata' key.
+    """
+    return portfolio_v2.construct_portfolio(
+        gem_signal, hy_regime, momentum_signal,
+        rebalance_threshold=rebalance_threshold,
+        prior_weights=prior_weights,
+    )
+
+
+def format_portfolio_v2(weights: dict) -> str:
+    """Format three-stage portfolio weights for console output."""
+    return portfolio_v2.format_portfolio(weights)
 
 
 if __name__ == "__main__":

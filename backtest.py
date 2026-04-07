@@ -2,11 +2,12 @@
 Backtest Engine: Historical simulation of the model portfolio.
 
 Strategies:
-  - gem_hy:     GEM + HY spread overlay (the full model)
-  - gem_pure:   GEM only, no HY overlay (control)
-  - gem_floor:  GEM + HY overlay with 70% equity floor
+  - momentum_hy: Three-stage: GEM abs momentum + momentum ranking + HY overlay
+  - gem_hy:      GEM + HY spread overlay (legacy two-signal model)
+  - gem_pure:    GEM only, no HY overlay (control)
+  - gem_floor:   GEM + HY overlay with 70% equity floor
   - sixty_forty: 60% SPY / 40% SHY, annual rebalance (control)
-  - buy_hold:   100% SPY buy-and-hold (control)
+  - buy_hold:    100% SPY buy-and-hold (control)
 
 Critical constraint: NO FUTURE DATA LEAKAGE.
 All signals computed using only data available as of the decision date.
@@ -22,6 +23,7 @@ import config
 import data as data_mod
 import signals as signals_mod
 import portfolio as portfolio_mod
+import portfolio_v2
 
 
 def _get_month_end_dates(
@@ -97,6 +99,10 @@ def run_backtest(
         return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
                         hy_b_spread, rebalance_dates,
                         start_date, end_date, use_hy_overlay=True, use_floor=True)
+    elif strategy == "momentum_hy":
+        return _run_momentum_hy(prices, daily_returns, hy_spread, ccc_bb_spread,
+                                hy_b_spread, rebalance_dates,
+                                start_date, end_date)
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -254,6 +260,108 @@ def _run_gem(
     return result
 
 
+def _run_momentum_hy(
+    prices: pd.DataFrame,
+    daily_returns: pd.DataFrame,
+    hy_spread: pd.Series,
+    ccc_bb_spread: pd.Series,
+    hy_b_spread: pd.Series,
+    rebalance_dates: list,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    Three-stage strategy: GEM absolute momentum + momentum ranking + HY regime.
+
+    Stage 1: GEM absolute momentum filter (crash avoidance).
+    Stage 2: Cross-asset momentum ranking (asset selection).
+    Stage 3: HY regime (risk budget sizing).
+    """
+    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
+    filtered_dates = daily_returns[mask].index
+
+    # Initialize — all tickers from portfolio_v2
+    current_weights = {t: 0.0 for t in portfolio_v2.ALL_TICKERS}
+    current_weights["SHY"] = 1.0  # Start defensive
+    results = []
+    rebalance_set = set(rebalance_dates)
+    tc_bps = config.TRANSACTION_COST_BPS / 10000
+
+    current_gem_signal = "SHY"
+    current_hy_regime = "NORMAL"
+    prior_momentum_signal = None
+
+    for date in filtered_dates:
+        if date in rebalance_set:
+            # Compute all three signals
+            gem_sig = signals_mod.compute_gem_signal(prices, date)
+
+            hy_data_available = (
+                len(ccc_bb_spread) > 0
+                and len(hy_b_spread) > 0
+                and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
+            )
+            if hy_data_available:
+                hy_reg = signals_mod.compute_hy_regime(
+                    ccc_bb_spread, hy_b_spread, date, hy_spread=hy_spread,
+                )
+            else:
+                hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
+
+            mom_sig = signals_mod.compute_momentum_ranking(
+                prices, date, prior_signal=prior_momentum_signal,
+            )
+
+            current_gem_signal = gem_sig.get("gem_signal", "SHY") or "SHY"
+            current_hy_regime = hy_reg.get("regime", "NORMAL") or "NORMAL"
+
+            # Three-stage portfolio construction
+            target_result = portfolio_v2.construct_portfolio(
+                gem_sig, hy_reg, mom_sig,
+                prior_weights=current_weights,
+            )
+
+            # Extract weights (filter out _metadata)
+            target_weights = {
+                k: v for k, v in target_result.items()
+                if k != "_metadata" and isinstance(v, (int, float))
+            }
+
+            # Transaction costs
+            tc = 0.0
+            for ticker in portfolio_v2.ALL_TICKERS:
+                old_w = current_weights.get(ticker, 0.0)
+                new_w = target_weights.get(ticker, 0.0)
+                if abs(new_w - old_w) > 1e-6:
+                    tc += tc_bps
+
+            current_weights = target_weights
+            prior_momentum_signal = mom_sig
+
+        # Daily portfolio return
+        day_ret = sum(
+            current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
+            for t in portfolio_v2.ALL_TICKERS
+            if t in daily_returns.columns
+        )
+
+        if date in rebalance_set:
+            day_ret -= tc
+
+        results.append({
+            "date": date,
+            "daily_return": day_ret,
+            "gem_signal": current_gem_signal,
+            "hy_regime": current_hy_regime,
+            "weights": json.dumps({k: round(v, 4) for k, v in current_weights.items() if v > 0}),
+        })
+
+    result = pd.DataFrame(results).set_index("date")
+    result["cumulative"] = (1 + result["daily_return"]).cumprod()
+    result["strategy"] = "momentum_hy"
+    return result
+
+
 def run_all_strategies(
     start_date: str = None,
     end_date: str = None,
@@ -264,7 +372,7 @@ def run_all_strategies(
     Returns:
         {"gem_hy": df, "gem_pure": df, "sixty_forty": df, "buy_hold": df}
     """
-    strategies = ["gem_hy", "gem_pure", "gem_floor", "sixty_forty", "buy_hold"]
+    strategies = ["momentum_hy", "gem_hy", "gem_pure", "gem_floor", "sixty_forty", "buy_hold"]
     results = {}
 
     for s in strategies:
