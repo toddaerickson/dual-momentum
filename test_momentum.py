@@ -262,12 +262,10 @@ def test_portfolio_gem_fail():
     )
 
     gem = {
-        "gem_signal": "SHY",
         "absolute_pass": False,
         "spy_12m_return": 0.02,
         "efa_12m_return": 0.01,
         "bil_12m_return": 0.04,
-        "relative_winner": "SPY",
     }
     hy = {"regime": "NORMAL", "fast_widen_override": False}
 
@@ -288,12 +286,10 @@ def test_portfolio_normal_regime():
     )
 
     gem = {
-        "gem_signal": "SPY",
         "absolute_pass": True,
         "spy_12m_return": 0.12,
         "efa_12m_return": 0.08,
         "bil_12m_return": 0.04,
-        "relative_winner": "SPY",
     }
     hy = {"regime": "NORMAL", "fast_widen_override": False}
 
@@ -324,12 +320,10 @@ def test_portfolio_stressed_regime():
     )
 
     gem = {
-        "gem_signal": "SPY",
         "absolute_pass": True,
         "spy_12m_return": 0.10,
         "efa_12m_return": 0.06,
         "bil_12m_return": 0.04,
-        "relative_winner": "SPY",
     }
     hy = {"regime": "STRESSED", "fast_widen_override": False}
 
@@ -358,12 +352,10 @@ def test_portfolio_crisis_regime():
     )
 
     gem = {
-        "gem_signal": "SPY",
         "absolute_pass": True,
         "spy_12m_return": 0.10,
         "efa_12m_return": 0.06,
         "bil_12m_return": 0.04,
-        "relative_winner": "SPY",
     }
     hy = {"regime": "CRISIS", "fast_widen_override": False}
 
@@ -393,12 +385,10 @@ def test_portfolio_widening_fast():
     )
 
     gem = {
-        "gem_signal": "SPY",
         "absolute_pass": True,
         "spy_12m_return": 0.12,
         "efa_12m_return": 0.08,
         "bil_12m_return": 0.04,
-        "relative_winner": "SPY",
     }
     hy = {"regime": "STRESSED", "fast_widen_override": True}
 

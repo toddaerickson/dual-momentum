@@ -24,7 +24,7 @@ import notifications
 def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str,
                    momentum_signal=None) -> str:
     """Build the plain English summary (mirrors dashboard logic)."""
-    gem_signal = gem.get("gem_signal", "N/A")
+    abs_pass = gem.get("absolute_pass", False)
     regime = hy.get("regime", "N/A")
     regime_primary = hy.get("regime_primary", "N/A")
     ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
@@ -39,26 +39,19 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str,
     bil_ret = gem.get("bil_12m_return", 0)
     abs_pass = gem.get("absolute_pass", False)
 
-    # GEM explanation
-    if gem_signal == "SPY":
+    # Absolute momentum explanation
+    best_equity = max(spy_ret, efa_ret)
+    if abs_pass:
         gem_english = (
-            f"US stocks (SPY) returned {spy_ret:+.1%} over the past 12 months, "
-            f"beating international stocks (EFA) at {efa_ret:+.1%} and clearing "
-            f"the T-bill hurdle of {bil_ret:+.1%}. "
-            "Momentum favors staying in US equities."
-        )
-    elif gem_signal == "EFA":
-        gem_english = (
-            f"International stocks (EFA) returned {efa_ret:+.1%} over the past 12 months, "
-            f"beating US stocks (SPY) at {spy_ret:+.1%} and clearing "
-            f"the T-bill hurdle of {bil_ret:+.1%}. "
-            "Momentum favors international equities."
+            f"Equities cleared the T-bill hurdle: SPY returned {spy_ret:+.1%}, "
+            f"EFA returned {efa_ret:+.1%}, both vs T-bills at {bil_ret:+.1%}. "
+            "Absolute momentum gate passes — proceed to cross-asset ranking."
         )
     else:
         gem_english = (
             f"Neither US stocks ({spy_ret:+.1%}) nor international stocks ({efa_ret:+.1%}) "
             f"beat T-bills ({bil_ret:+.1%}) over the past 12 months. "
-            "Momentum says step aside into short-term Treasuries."
+            "Absolute momentum gate fails — 100% short-term Treasuries."
         )
 
     # Regime explanation (dual-signal)
@@ -98,18 +91,10 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str,
         roc_english = f"Single-B OAS tightened {b_change:+.0f} bps over 3 months (TIGHTENING)."
 
     # Conviction
-    margin = abs(spy_ret - efa_ret)
     abs_margin = max(spy_ret, efa_ret) - bil_ret
     conviction_parts = []
 
-    if gem_signal in ("SPY", "EFA"):
-        if margin > 0.10:
-            conviction_parts.append("Wide gap between US and international — high conviction in the equity pick.")
-        elif margin > 0.03:
-            conviction_parts.append("Moderate gap between US and international — reasonably clear winner.")
-        else:
-            conviction_parts.append("US and international returns are very close — the winner could flip next month.")
-
+    if abs_pass:
         if abs_margin > 0.10:
             conviction_parts.append("Equities well ahead of T-bills — strong case to stay invested.")
         elif abs_margin > 0.03:
@@ -175,15 +160,13 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str,
         "",
         "=" * 50,
         "",
-        "STAGE 1: ABSOLUTE MOMENTUM (GEM)",
+        "STAGE 1: ABSOLUTE MOMENTUM GATE",
         gem_english,
         "",
         f"  SPY 12M return:  {spy_ret:+.1%}",
         f"  EFA 12M return:  {efa_ret:+.1%}",
         f"  BIL 12M return:  {bil_ret:+.1%}",
-        f"  Relative winner: {gem.get('relative_winner', 'N/A')}",
         f"  Absolute pass:   {'YES' if abs_pass else 'NO'}",
-        f"  GEM signal:      {gem_signal}",
         "",
     ]
     lines.extend(mom_lines)
@@ -246,7 +229,7 @@ def run():
     mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
 
-    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    target_v2 = portfolio_mod.construct_portfolio(gem, hy, mom)
     target = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     # Build summary
@@ -260,7 +243,8 @@ def run():
             alloc_parts.append(f"{ticker} {w:.0%}")
     alloc_str = " / ".join(alloc_parts)
 
-    subject = f"DM Weekly: {gem.get('gem_signal', '?')} / {hy.get('regime', '?')} — {alloc_str}"
+    abs_label = "PASS" if gem.get("absolute_pass") else "FAIL"
+    subject = f"DM Weekly: AbsMom {abs_label} / {hy.get('regime', '?')} — {alloc_str}"
 
     # Send
     print(f"\n{body}\n")

@@ -2,11 +2,8 @@
 Backtest Engine: Historical simulation of the model portfolio.
 
 Strategies:
-  - momentum_hy: Three-stage: GEM abs momentum + momentum ranking + HY overlay
-  - gem_hy:      GEM + HY spread overlay (legacy two-signal model)
-  - gem_pure:    GEM only, no HY overlay (control)
-  - gem_floor:   GEM + HY overlay with 70% equity floor
-  - sixty_forty: 60% SPY / 40% SHY, annual rebalance (control)
+  - momentum_hy: Three-stage: abs momentum gate + momentum ranking + HY overlay
+  - sixty_forty: 60% SPY / 40% SHY, monthly rebalance (control)
   - buy_hold:    100% SPY buy-and-hold (control)
 
 Critical constraint: NO FUTURE DATA LEAKAGE.
@@ -22,7 +19,6 @@ import pandas as pd
 import config
 import data as data_mod
 import signals as signals_mod
-import portfolio as portfolio_mod
 import portfolio_v2
 
 
@@ -53,7 +49,7 @@ def _compute_daily_returns(prices: pd.DataFrame) -> pd.DataFrame:
 def run_backtest(
     start_date: str = None,
     end_date: str = None,
-    strategy: str = "gem_hy",
+    strategy: str = "momentum_hy",
 ) -> pd.DataFrame:
     """
     Run historical backtest for the specified strategy.
@@ -61,7 +57,7 @@ def run_backtest(
     Args:
         start_date: Backtest start (default: config.BACKTEST_START)
         end_date: Backtest end (default: latest data)
-        strategy: One of 'gem_hy', 'gem_pure', 'sixty_forty', 'buy_hold'
+        strategy: One of 'momentum_hy', 'sixty_forty', 'buy_hold'
 
     Returns:
         DataFrame with daily portfolio values and metadata
@@ -87,18 +83,6 @@ def run_backtest(
         return _run_buy_hold(prices, daily_returns, start_date, end_date)
     elif strategy == "sixty_forty":
         return _run_sixty_forty(prices, daily_returns, rebalance_dates, start_date, end_date)
-    elif strategy == "gem_pure":
-        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
-                        hy_b_spread, rebalance_dates,
-                        start_date, end_date, use_hy_overlay=False)
-    elif strategy == "gem_hy":
-        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
-                        hy_b_spread, rebalance_dates,
-                        start_date, end_date, use_hy_overlay=True)
-    elif strategy == "gem_floor":
-        return _run_gem(prices, daily_returns, hy_spread, ccc_bb_spread,
-                        hy_b_spread, rebalance_dates,
-                        start_date, end_date, use_hy_overlay=True, use_floor=True)
     elif strategy == "momentum_hy":
         return _run_momentum_hy(prices, daily_returns, hy_spread, ccc_bb_spread,
                                 hy_b_spread, rebalance_dates,
@@ -122,7 +106,7 @@ def _run_buy_hold(
     result["cumulative"] = (1 + spy_returns).cumprod()
     result["strategy"] = "buy_hold"
     result["weights"] = json.dumps({"SPY": 1.0})
-    result["gem_signal"] = ""
+    result["absolute_pass"] = ""
     result["hy_regime"] = ""
     return result
 
@@ -153,110 +137,8 @@ def _run_sixty_forty(
     result["cumulative"] = (1 + result["daily_return"]).cumprod()
     result["strategy"] = "sixty_forty"
     result["weights"] = json.dumps(weights)
-    result["gem_signal"] = ""
+    result["absolute_pass"] = ""
     result["hy_regime"] = ""
-    return result
-
-
-def _run_gem(
-    prices: pd.DataFrame,
-    daily_returns: pd.DataFrame,
-    hy_spread: pd.Series,
-    ccc_bb_spread: pd.Series,
-    hy_b_spread: pd.Series,
-    rebalance_dates: list,
-    start_date: str,
-    end_date: str,
-    use_hy_overlay: bool = True,
-    use_floor: bool = False,
-) -> pd.DataFrame:
-    """
-    Run GEM strategy (with or without HY overlay).
-
-    Rebalances on last trading day of each month.
-    Transaction costs applied on position changes.
-    """
-    mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
-    filtered_dates = daily_returns[mask].index
-
-    # Initialize tracking
-    current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}  # Start defensive
-    results = []
-    rebalance_set = set(rebalance_dates)
-    tc_bps = config.TRANSACTION_COST_BPS / 10000
-
-    current_gem_signal = "SHY"
-    current_hy_regime = "NORMAL"
-
-    for date in filtered_dates:
-        # Check if rebalance day
-        if date in rebalance_set:
-            # Compute signals
-            gem_sig = signals_mod.compute_gem_signal(prices, date)
-
-            # HY overlay only available after HY OAS data begins (1997)
-            hy_data_available = (
-                len(ccc_bb_spread) > 0
-                and len(hy_b_spread) > 0
-                and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM)
-            )
-            if hy_data_available:
-                hy_reg = signals_mod.compute_hy_regime(
-                    ccc_bb_spread, hy_b_spread, date, hy_spread=hy_spread,
-                )
-            else:
-                # Pre-HY data: assume TIGHT (no overlay effect)
-                hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
-
-            current_gem_signal = gem_sig.get("gem_signal", "SHY") or "SHY"
-            current_hy_regime = hy_reg.get("regime", "NORMAL") or "NORMAL"
-
-            if use_floor:
-                target_weights = portfolio_mod.construct_portfolio_floor(gem_sig, hy_reg)
-            elif use_hy_overlay:
-                target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
-            else:
-                # Pure GEM: ignore HY regime
-                pure_hy = {"regime": "TIGHT", "fast_widen_override": False}
-                target_weights = portfolio_mod.construct_portfolio(gem_sig, pure_hy)
-
-            # Compute transaction costs
-            tc = 0.0
-            for ticker in config.ALL_TICKERS:
-                old_w = current_weights.get(ticker, 0.0)
-                new_w = target_weights.get(ticker, 0.0)
-                if abs(new_w - old_w) > 1e-6:
-                    tc += tc_bps  # Flat cost per changed position
-
-            current_weights = target_weights
-
-        # Compute daily portfolio return
-        day_ret = sum(
-            current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
-            for t in config.ALL_TICKERS
-            if t in daily_returns.columns
-        )
-
-        # Subtract transaction cost on rebalance day
-        if date in rebalance_set:
-            day_ret -= tc
-
-        results.append({
-            "date": date,
-            "daily_return": day_ret,
-            "gem_signal": current_gem_signal,
-            "hy_regime": current_hy_regime,
-            "weights": json.dumps({k: round(v, 4) for k, v in current_weights.items() if v > 0}),
-        })
-
-    result = pd.DataFrame(results).set_index("date")
-    result["cumulative"] = (1 + result["daily_return"]).cumprod()
-    if use_floor:
-        result["strategy"] = "gem_floor"
-    elif use_hy_overlay:
-        result["strategy"] = "gem_hy"
-    else:
-        result["strategy"] = "gem_pure"
     return result
 
 
@@ -287,14 +169,14 @@ def _run_momentum_hy(
     rebalance_set = set(rebalance_dates)
     tc_bps = config.TRANSACTION_COST_BPS / 10000
 
-    current_gem_signal = "SHY"
+    current_abs_pass = False
     current_hy_regime = "NORMAL"
     prior_momentum_signal = None
 
     for date in filtered_dates:
         if date in rebalance_set:
             # Compute all three signals
-            gem_sig = signals_mod.compute_gem_signal(prices, date)
+            gem_sig = signals_mod.compute_absolute_momentum(prices, date)
 
             hy_data_available = (
                 len(ccc_bb_spread) > 0
@@ -312,7 +194,7 @@ def _run_momentum_hy(
                 prices, date, prior_signal=prior_momentum_signal,
             )
 
-            current_gem_signal = gem_sig.get("gem_signal", "SHY") or "SHY"
+            current_abs_pass = gem_sig.get("absolute_pass", False)
             current_hy_regime = hy_reg.get("regime", "NORMAL") or "NORMAL"
 
             # Three-stage portfolio construction
@@ -351,7 +233,7 @@ def _run_momentum_hy(
         results.append({
             "date": date,
             "daily_return": day_ret,
-            "gem_signal": current_gem_signal,
+            "absolute_pass": current_abs_pass,
             "hy_regime": current_hy_regime,
             "weights": json.dumps({k: round(v, 4) for k, v in current_weights.items() if v > 0}),
         })
@@ -367,12 +249,12 @@ def run_all_strategies(
     end_date: str = None,
 ) -> dict[str, pd.DataFrame]:
     """
-    Run all four strategies and return results dict.
+    Run all strategies and return results dict.
 
     Returns:
-        {"gem_hy": df, "gem_pure": df, "sixty_forty": df, "buy_hold": df}
+        {"momentum_hy": df, "sixty_forty": df, "buy_hold": df}
     """
-    strategies = ["momentum_hy", "gem_hy", "gem_pure", "gem_floor", "sixty_forty", "buy_hold"]
+    strategies = ["momentum_hy", "sixty_forty", "buy_hold"]
     results = {}
 
     for s in strategies:

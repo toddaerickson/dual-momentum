@@ -26,8 +26,7 @@ def _ensure_file(filepath: Path, columns: list[str]) -> None:
 # ──────────────────────────────────────────────
 
 SIGNAL_COLUMNS = [
-    "date", "gem_signal", "spy_12m_return", "efa_12m_return", "bil_12m_return",
-    "relative_winner", "absolute_pass",
+    "date", "absolute_pass", "spy_12m_return", "efa_12m_return", "bil_12m_return",
     "ccc_bb_spread_current", "ccc_bb_percentile",
     "hy_b_current", "hy_b_percentile", "hy_b_3m_ago", "hy_b_change_3m",
     "hy_spread_current",
@@ -62,12 +61,10 @@ def log_daily(
 
     row = {
         "date": date,
-        "gem_signal": gem_signal.get("gem_signal"),
+        "absolute_pass": gem_signal.get("absolute_pass"),
         "spy_12m_return": gem_signal.get("spy_12m_return"),
         "efa_12m_return": gem_signal.get("efa_12m_return"),
         "bil_12m_return": gem_signal.get("bil_12m_return"),
-        "relative_winner": gem_signal.get("relative_winner"),
-        "absolute_pass": gem_signal.get("absolute_pass"),
         "ccc_bb_spread_current": hy_regime.get("ccc_bb_spread_current"),
         "ccc_bb_percentile": hy_regime.get("ccc_bb_percentile"),
         "hy_b_current": hy_regime.get("hy_b_current"),
@@ -96,7 +93,7 @@ def log_daily(
 # ──────────────────────────────────────────────
 
 PORTFOLIO_COLUMNS = [
-    "date", "gem_signal", "hy_regime", "fast_widen_override",
+    "date", "absolute_pass", "hy_regime", "fast_widen_override",
     "target_weights", "prior_weights", "trades",
 ]
 
@@ -114,7 +111,7 @@ def log_monthly(
 
     row = {
         "date": date,
-        "gem_signal": gem_signal,
+        "absolute_pass": gem_signal,
         "hy_regime": hy_regime,
         "fast_widen_override": False,
         "target_weights": json.dumps(target_weights),
@@ -174,19 +171,19 @@ def detect_signal_change() -> dict:
     try:
         df = pd.read_csv(config.SIGNALS_HISTORY_FILE)
         if len(df) < 2:
-            return {"gem_changed": False, "regime_changed": False, "override_activated": False}
+            return {"abs_mom_changed": False, "regime_changed": False, "override_activated": False}
 
         current = df.iloc[-1]
         previous = df.iloc[-2]
 
         return {
-            "gem_changed": current["gem_signal"] != previous["gem_signal"],
+            "abs_mom_changed": bool(current.get("absolute_pass")) != bool(previous.get("absolute_pass")),
             "regime_changed": current["hy_regime"] != previous["hy_regime"],
             "override_activated": bool(current.get("fast_widen_override", False)),
-            "current_gem": current["gem_signal"],
-            "previous_gem": previous["gem_signal"],
+            "current_abs_pass": bool(current.get("absolute_pass")),
+            "previous_abs_pass": bool(previous.get("absolute_pass")),
             "current_regime": current["hy_regime"],
             "previous_regime": previous["hy_regime"],
         }
     except Exception:
-        return {"gem_changed": False, "regime_changed": False, "override_activated": False}
+        return {"abs_mom_changed": False, "regime_changed": False, "override_activated": False}

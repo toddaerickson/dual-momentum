@@ -19,19 +19,23 @@ import data as data_mod
 import momentum_rank
 
 
-def compute_gem_signal(
+def compute_absolute_momentum(
     prices: pd.DataFrame,
     as_of_date: pd.Timestamp,
     lookback_months: int = None,
 ) -> dict:
     """
-    Compute Global Equity Momentum (GEM) signal.
+    Compute absolute momentum gate (Stage 1).
 
     Logic:
-      1. Compare 12-month total return of SPY vs EFA
-      2. Winner = max(SPY, EFA) → relative momentum
-      3. If winner return > BIL return → hold winner (absolute momentum pass)
-      4. Else → hold SHY (absolute momentum fail, risk-off)
+      1. Compute 12-month total return of SPY and EFA
+      2. If max(SPY, EFA) > BIL return → absolute_pass = True (proceed to Stage 2)
+      3. Else → absolute_pass = False (100% SHY, skip ranking)
+
+    The SPY/EFA pair is used as the equity benchmark because they are the
+    most liquid developed-market proxies.  Gold or commodities beating
+    T-bills during an equity bear is exactly when the crash filter should
+    activate, so we intentionally exclude them from the hurdle check.
 
     Args:
         prices: DataFrame of adjusted close prices
@@ -39,7 +43,7 @@ def compute_gem_signal(
         lookback_months: Override for lookback period (default: config)
 
     Returns:
-        dict with signal details
+        dict with absolute_pass (bool) and return details
     """
     if lookback_months is None:
         lookback_months = config.GEM_LOOKBACK_MONTHS
@@ -76,44 +80,30 @@ def compute_gem_signal(
             "spy_12m_return": spy_ret,
             "efa_12m_return": efa_ret,
             "bil_12m_return": bil_ret,
-            "relative_winner": None,
             "absolute_pass": None,
-            "gem_signal": None,
             "error": "Insufficient data for lookback period",
         }
 
-    # Step 1-2: Relative momentum
+    # Best equity return vs T-bill hurdle
     if efa_available:
-        # Normal GEM: compare SPY vs EFA
-        if spy_ret >= efa_ret:
-            relative_winner = "SPY"
-            winner_ret = spy_ret
-        else:
-            relative_winner = "EFA"
-            winner_ret = efa_ret
+        best_equity_ret = max(spy_ret, efa_ret)
     else:
-        # Pre-EFA: SPY is the only equity candidate
-        relative_winner = "SPY"
-        winner_ret = spy_ret
+        best_equity_ret = spy_ret
 
-    # Step 3-4: Absolute momentum
-    absolute_pass = winner_ret > bil_ret
-
-    if absolute_pass:
-        gem_signal = relative_winner
-    else:
-        gem_signal = "SHY"
+    absolute_pass = best_equity_ret > bil_ret
 
     return {
         "date": as_of.strftime("%Y-%m-%d"),
         "spy_12m_return": round(spy_ret, 6),
         "efa_12m_return": round(efa_ret, 6) if not np.isnan(efa_ret) else None,
         "bil_12m_return": round(bil_ret, 6),
-        "relative_winner": relative_winner,
-        "winner_return": round(winner_ret, 6),
+        "best_equity_return": round(best_equity_ret, 6),
         "absolute_pass": absolute_pass,
-        "gem_signal": gem_signal,
     }
+
+
+# Backward-compatible alias
+compute_gem_signal = compute_absolute_momentum
 
 
 def _expanding_percentile_rank(series: pd.Series, as_of: pd.Timestamp) -> float:
@@ -361,7 +351,7 @@ def compute_all_signals(
     Returns:
         dict with keys: 'gem', 'hy_regime', 'momentum', 'yield_curve'
     """
-    gem = compute_gem_signal(prices, as_of_date)
+    gem = compute_absolute_momentum(prices, as_of_date)
 
     if ccc_bb_spread is not None and hy_b_spread is not None:
         hy = compute_hy_regime(ccc_bb_spread, hy_b_spread, as_of_date,
@@ -471,11 +461,11 @@ if __name__ == "__main__":
     hy = signals["hy_regime"]
     mom = signals["momentum"]
 
-    print(f"\nStage 1 — GEM Signal: {gem['gem_signal']}")
+    abs_pass = gem['absolute_pass']
+    print(f"\nStage 1 — Absolute Momentum: {'PASS' if abs_pass else 'FAIL'}")
     print(f"  SPY 12M: {gem['spy_12m_return']:+.1%}")
     print(f"  EFA 12M: {gem['efa_12m_return']:+.1%}")
     print(f"  BIL 12M: {gem['bil_12m_return']:+.1%}")
-    print(f"  Abs Pass: {gem['absolute_pass']}")
 
     print(f"\nStage 2 — Momentum Ranking:")
     print(momentum_rank.format_momentum_signal(mom))

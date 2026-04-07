@@ -1,5 +1,5 @@
 """
-Dual Momentum + HY Spread Model Portfolio System
+Three-Stage TAA Model Portfolio System
 Configuration and Constants
 
 All thresholds, tickers, and FRED series IDs are defined here.
@@ -139,65 +139,7 @@ HY_ROC_THRESHOLDS = {
 HY_ROC_LOOKBACK_MONTHS = 3          # Period for rate of change calc
 
 # ──────────────────────────────────────────────
-# Portfolio Weights (from decision matrix)
-# ──────────────────────────────────────────────
-# Format: {(gem_signal, hy_regime): {ticker: weight}}
-# WIDENING_FAST override handled separately in portfolio.py
-
-ALLOCATION_MATRIX = {
-    # TIGHT regime
-    ("SPY", "TIGHT"):    {"SPY": 1.0, "EFA": 0.0, "SHY": 0.0, "ANGL": 0.0},
-    ("EFA", "TIGHT"):    {"SPY": 0.0, "EFA": 1.0, "SHY": 0.0, "ANGL": 0.0},
-    ("SHY", "TIGHT"):    {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0},
-
-    # NORMAL regime
-    ("SPY", "NORMAL"):   {"SPY": 1.0, "EFA": 0.0, "SHY": 0.0, "ANGL": 0.0},
-    ("EFA", "NORMAL"):   {"SPY": 0.0, "EFA": 1.0, "SHY": 0.0, "ANGL": 0.0},
-    ("SHY", "NORMAL"):   {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0},
-
-    # STRESSED regime
-    ("SPY", "STRESSED"): {"SPY": 0.7, "EFA": 0.0, "SHY": 0.3, "ANGL": 0.0},
-    ("EFA", "STRESSED"): {"SPY": 0.0, "EFA": 0.7, "SHY": 0.3, "ANGL": 0.0},
-    ("SHY", "STRESSED"): {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0},
-
-    # CRISIS regime
-    ("SPY", "CRISIS"):   {"SPY": 0.5, "EFA": 0.0, "SHY": 0.3, "ANGL": 0.2},
-    ("EFA", "CRISIS"):   {"SPY": 0.0, "EFA": 0.5, "SHY": 0.3, "ANGL": 0.2},
-    ("SHY", "CRISIS"):   {"SPY": 0.0, "EFA": 0.0, "SHY": 0.8, "ANGL": 0.2},
-}
-
-# WIDENING_FAST override allocation (applied when 3mo HY change > 100 bps)
-WIDENING_FAST_OVERRIDE = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
-
-# ──────────────────────────────────────────────
-# gem_floor Strategy: 70% Equity Floor Allocations
-# ──────────────────────────────────────────────
-# When absolute momentum PASSES: full equity in TIGHT/NORMAL, softer HY overlay
-ALLOCATION_MATRIX_FLOOR_OFFENSIVE = {
-    ("SPY", "TIGHT"):    {"SPY": 1.0, "EFA": 0.0, "SHY": 0.0, "ANGL": 0.0},
-    ("EFA", "TIGHT"):    {"SPY": 0.0, "EFA": 1.0, "SHY": 0.0, "ANGL": 0.0},
-    ("SPY", "NORMAL"):   {"SPY": 1.0, "EFA": 0.0, "SHY": 0.0, "ANGL": 0.0},
-    ("EFA", "NORMAL"):   {"SPY": 0.0, "EFA": 1.0, "SHY": 0.0, "ANGL": 0.0},
-    ("SPY", "STRESSED"): {"SPY": 0.8, "EFA": 0.0, "SHY": 0.2, "ANGL": 0.0},
-    ("EFA", "STRESSED"): {"SPY": 0.0, "EFA": 0.8, "SHY": 0.2, "ANGL": 0.0},
-    ("SPY", "CRISIS"):   {"SPY": 0.7, "EFA": 0.0, "SHY": 0.1, "ANGL": 0.2},
-    ("EFA", "CRISIS"):   {"SPY": 0.0, "EFA": 0.7, "SHY": 0.1, "ANGL": 0.2},
-}
-
-# When absolute momentum FAILS: 70% equity floor + 30% defensive
-ALLOCATION_MATRIX_FLOOR_DEFENSIVE = {
-    ("SPY", "TIGHT"):    {"SPY": 0.7, "EFA": 0.0, "SHY": 0.3, "ANGL": 0.0},
-    ("EFA", "TIGHT"):    {"SPY": 0.0, "EFA": 0.7, "SHY": 0.3, "ANGL": 0.0},
-    ("SPY", "NORMAL"):   {"SPY": 0.7, "EFA": 0.0, "SHY": 0.3, "ANGL": 0.0},
-    ("EFA", "NORMAL"):   {"SPY": 0.0, "EFA": 0.7, "SHY": 0.3, "ANGL": 0.0},
-    ("SPY", "STRESSED"): {"SPY": 0.7, "EFA": 0.0, "SHY": 0.3, "ANGL": 0.0},
-    ("EFA", "STRESSED"): {"SPY": 0.0, "EFA": 0.7, "SHY": 0.3, "ANGL": 0.0},
-    ("SPY", "CRISIS"):   {"SPY": 0.7, "EFA": 0.0, "SHY": 0.1, "ANGL": 0.2},
-    ("EFA", "CRISIS"):   {"SPY": 0.0, "EFA": 0.7, "SHY": 0.1, "ANGL": 0.2},
-}
-
-# ──────────────────────────────────────────────
-# Three-Stage Risk Budget (from portfolio_v2)
+# Three-Stage Risk Budget
 # ──────────────────────────────────────────────
 # Stage 3: HY regime determines what fraction of the portfolio goes to risky assets
 REGIME_RISK_BUDGET = {
