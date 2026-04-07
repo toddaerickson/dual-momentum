@@ -1,9 +1,10 @@
 """
-Signal Computation: GEM Dual Momentum + HY Spread Regime
+Signal Computation: Three-Stage TAA Signals.
 
-Two independent signals:
-  1. GEM: 12-month relative + absolute momentum → SPY, EFA, or SHY
-  2. HY Regime: Spread level + rate of change → TIGHT/NORMAL/STRESSED/CRISIS
+Three independent signals:
+  1. GEM: 12-month absolute momentum filter → crash avoidance gate
+  2. Momentum Ranking: Cross-asset 12-1 month momentum → asset selection
+  3. HY Regime: Dual-signal credit spread classifier → risk budget sizing
 
 No future data leakage: all computations use only data available as of as_of_date.
 """
@@ -15,6 +16,7 @@ import pandas as pd
 
 import config
 import data as data_mod
+import momentum_rank
 
 
 def compute_gem_signal(
@@ -308,15 +310,44 @@ def compute_yield_curve_status(
         return {"t10y2y": None, "status": "ERROR", "error": str(e)}
 
 
+def compute_momentum_ranking(
+    prices: pd.DataFrame,
+    as_of_date: pd.Timestamp,
+    prior_signal: 'momentum_rank.MomentumSignal | None' = None,
+    mom_config: 'momentum_rank.MomentumConfig | None' = None,
+) -> 'momentum_rank.MomentumSignal':
+    """
+    Compute cross-asset momentum ranking (Stage 2).
+
+    Wrapper around momentum_rank.compute_momentum_signal() for use
+    alongside GEM and HY regime signals.
+
+    Args:
+        prices: ETF price DataFrame (must include risky tickers)
+        as_of_date: Signal date
+        prior_signal: Previous month's MomentumSignal (for hysteresis)
+        mom_config: MomentumConfig instance (uses defaults if None)
+
+    Returns:
+        MomentumSignal with rankings, terciles, and risky weights
+    """
+    return momentum_rank.compute_momentum_signal(
+        prices, as_of_date,
+        prior_signal=prior_signal,
+        config=mom_config,
+    )
+
+
 def compute_all_signals(
     prices: pd.DataFrame,
     hy_spread: pd.Series,
     as_of_date: pd.Timestamp,
     ccc_bb_spread: pd.Series = None,
     hy_b_spread: pd.Series = None,
+    prior_momentum_signal: 'momentum_rank.MomentumSignal | None' = None,
 ) -> dict:
     """
-    Compute all signals for a given date.
+    Compute all three signals for a given date.
 
     Args:
         prices: ETF price DataFrame
@@ -325,9 +356,10 @@ def compute_all_signals(
         as_of_date: Signal date
         ccc_bb_spread: CCC-BB spread series (primary regime signal)
         hy_b_spread: Single-B OAS series (secondary signal + ROC)
+        prior_momentum_signal: Previous month's MomentumSignal (for hysteresis)
 
     Returns:
-        dict with keys: 'gem', 'hy_regime', 'yield_curve'
+        dict with keys: 'gem', 'hy_regime', 'momentum', 'yield_curve'
     """
     gem = compute_gem_signal(prices, as_of_date)
 
@@ -338,11 +370,14 @@ def compute_all_signals(
         # Fallback: use composite HY OAS with legacy fixed-bps thresholds
         hy = _compute_hy_regime_legacy(hy_spread, as_of_date)
 
+    mom = compute_momentum_ranking(prices, as_of_date,
+                                   prior_signal=prior_momentum_signal)
     yc = compute_yield_curve_status(as_of_date)
 
     return {
         "gem": gem,
         "hy_regime": hy,
+        "momentum": mom,
         "yield_curve": yc,
     }
 
@@ -432,14 +467,20 @@ if __name__ == "__main__":
         hy_b_spread=all_data["hy_b_spread"],
     )
 
+    gem = signals["gem"]
     hy = signals["hy_regime"]
-    print(f"\nGEM Signal: {signals['gem']['gem_signal']}")
-    print(f"  SPY 12M: {signals['gem']['spy_12m_return']:+.1%}")
-    print(f"  EFA 12M: {signals['gem']['efa_12m_return']:+.1%}")
-    print(f"  BIL 12M: {signals['gem']['bil_12m_return']:+.1%}")
-    print(f"  Abs Pass: {signals['gem']['absolute_pass']}")
+    mom = signals["momentum"]
 
-    print(f"\nHY Regime: {hy['regime']} (primary: {hy['regime_primary']})")
+    print(f"\nStage 1 — GEM Signal: {gem['gem_signal']}")
+    print(f"  SPY 12M: {gem['spy_12m_return']:+.1%}")
+    print(f"  EFA 12M: {gem['efa_12m_return']:+.1%}")
+    print(f"  BIL 12M: {gem['bil_12m_return']:+.1%}")
+    print(f"  Abs Pass: {gem['absolute_pass']}")
+
+    print(f"\nStage 2 — Momentum Ranking:")
+    print(momentum_rank.format_momentum_signal(mom))
+
+    print(f"\nStage 3 — HY Regime: {hy['regime']} (primary: {hy['regime_primary']})")
     print(f"  CCC-BB spread: {hy['ccc_bb_spread_current']:.0f} bps (pctl: {hy['ccc_bb_percentile']:.0f})")
     print(f"  Single-B OAS:  {hy['hy_b_current']:.0f} bps (pctl: {hy['hy_b_percentile']:.0f})")
     b_chg = hy['hy_b_change_3m']

@@ -16,10 +16,13 @@ import config
 import data as data_mod
 import signals as signals_mod
 import portfolio as portfolio_mod
+import portfolio_v2
+import momentum_rank
 import notifications
 
 
-def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -> str:
+def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str,
+                   momentum_signal=None) -> str:
     """Build the plain English summary (mirrors dashboard logic)."""
     gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
@@ -128,18 +131,36 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
 
     conviction_english = " ".join(conviction_parts)
 
+    # Momentum ranking summary
+    import numpy as _np
+    mom_lines = []
+    if momentum_signal is not None:
+        mom_lines.append("MOMENTUM RANKING (Stage 2)")
+        mom_lines.append(f"Metric: {momentum_signal.ranking_metric} | Assets: {momentum_signal.available_assets}")
+        for ticker in sorted(momentum_signal.ranks.keys(), key=lambda t: momentum_signal.ranks.get(t, 99)):
+            raw = momentum_signal.raw_momentum.get(ticker, float('nan'))
+            raw_s = f"{raw:+.1%}" if not _np.isnan(raw) else "N/A"
+            terc = momentum_signal.terciles.get(ticker, "N/A")
+            rw = momentum_signal.risky_weights.get(ticker, 0.0)
+            mom_lines.append(f"  {ticker:<6} {terc:<8} wt={rw:.0%}  (12-1M: {raw_s})")
+        mom_lines.append("")
+
     # Target allocation
-    ticker_names = {"SPY": "US stocks", "EFA": "international stocks", "SHY": "short-term Treasuries", "ANGL": "fallen angel bonds"}
+    ticker_names = {
+        "SPY": "US stocks", "EFA": "international stocks", "EEM": "emerging markets",
+        "VNQ": "REITs", "DBC": "commodities", "GLD": "gold",
+        "SHY": "short-term Treasuries", "ANGL": "fallen angel bonds",
+    }
     alloc_parts = []
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in portfolio_v2.ALL_TICKERS:
         w = target.get(ticker, 0)
-        if w > 0:
+        if w > 0.001:
             alloc_parts.append(f"{w:.0%} {ticker}")
     alloc_str = " / ".join(alloc_parts)
 
     alloc_plain = ", ".join(
         f"{target[t]:.0%} in {ticker_names.get(t, t)}"
-        for t in ["SPY", "EFA", "SHY", "ANGL"] if target.get(t, 0) > 0
+        for t in portfolio_v2.ALL_TICKERS if target.get(t, 0) > 0.001
     )
 
     # Yield curve
@@ -148,13 +169,13 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
 
     # Assemble email
     lines = [
-        f"DUAL MOMENTUM WEEKLY SUMMARY",
+        f"THREE-STAGE TAA WEEKLY SUMMARY",
         f"Signals as of {as_of_str}",
         f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         "",
         "=" * 50,
         "",
-        "MOMENTUM (GEM)",
+        "STAGE 1: ABSOLUTE MOMENTUM (GEM)",
         gem_english,
         "",
         f"  SPY 12M return:  {spy_ret:+.1%}",
@@ -164,7 +185,10 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
         f"  Absolute pass:   {'YES' if abs_pass else 'NO'}",
         f"  GEM signal:      {gem_signal}",
         "",
-        "CREDIT CONDITIONS (HY REGIME)",
+    ]
+    lines.extend(mom_lines)
+    lines.extend([
+        "STAGE 3: CREDIT CONDITIONS (HY REGIME)",
         regime_english,
         "",
         f"  CCC-BB spread:     {ccc_bb:.0f} bps (pctl: {ccc_bb_pctl:.0f})",
@@ -188,7 +212,7 @@ def build_summary(gem: dict, hy: dict, yc: dict, target: dict, as_of_str: str) -
         "",
         "Rebalance on the last business day of the month.",
         "Between rebalances, do nothing.",
-    ]
+    ])
 
     return "\n".join(lines)
 
@@ -209,7 +233,7 @@ def run():
         print(f"ERROR: Data fetch failed: {e}")
         sys.exit(1)
 
-    # Compute signals
+    # Compute signals (all three stages)
     as_of = prices.index[-1]
     as_of_str = as_of.strftime("%Y-%m-%d")
 
@@ -219,18 +243,20 @@ def run():
     )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
+    mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
 
-    target = portfolio_mod.construct_portfolio(gem, hy)
+    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    target = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     # Build summary
-    body = build_summary(gem, hy, yc, target, as_of_str)
+    body = build_summary(gem, hy, yc, target, as_of_str, momentum_signal=mom)
 
     # Target allocation for subject line
     alloc_parts = []
-    for ticker in ["SPY", "EFA", "SHY", "ANGL"]:
+    for ticker in portfolio_v2.ALL_TICKERS:
         w = target.get(ticker, 0)
-        if w > 0:
+        if w > 0.001:
             alloc_parts.append(f"{ticker} {w:.0%}")
     alloc_str = " / ".join(alloc_parts)
 

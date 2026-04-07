@@ -32,6 +32,8 @@ SIGNAL_COLUMNS = [
     "hy_b_current", "hy_b_percentile", "hy_b_3m_ago", "hy_b_change_3m",
     "hy_spread_current",
     "hy_regime_primary", "hy_regime", "hy_roc_class", "fast_widen_override",
+    "momentum_top_tickers", "momentum_mid_tickers", "momentum_ranking_metric",
+    "momentum_available_assets",
     "t10y2y", "yc_status",
 ]
 
@@ -41,9 +43,22 @@ def log_daily(
     gem_signal: dict,
     hy_regime: dict,
     yield_curve: dict = None,
+    momentum_signal=None,
 ) -> None:
     """Append one row to signals_history.csv."""
     _ensure_file(config.SIGNALS_HISTORY_FILE, SIGNAL_COLUMNS)
+
+    # Extract momentum summary if available
+    mom_top = ""
+    mom_mid = ""
+    mom_metric = ""
+    mom_available = 0
+    if momentum_signal is not None:
+        terciles = getattr(momentum_signal, "terciles", {})
+        mom_top = ",".join(t for t, v in sorted(terciles.items()) if v == "TOP")
+        mom_mid = ",".join(t for t, v in sorted(terciles.items()) if v == "MID")
+        mom_metric = getattr(momentum_signal, "ranking_metric", "")
+        mom_available = getattr(momentum_signal, "available_assets", 0)
 
     row = {
         "date": date,
@@ -64,6 +79,10 @@ def log_daily(
         "hy_regime": hy_regime.get("regime"),
         "hy_roc_class": hy_regime.get("rate_of_change"),
         "fast_widen_override": hy_regime.get("fast_widen_override"),
+        "momentum_top_tickers": mom_top,
+        "momentum_mid_tickers": mom_mid,
+        "momentum_ranking_metric": mom_metric,
+        "momentum_available_assets": mom_available,
         "t10y2y": yield_curve.get("t10y2y") if yield_curve else None,
         "yc_status": yield_curve.get("status") if yield_curve else None,
     }

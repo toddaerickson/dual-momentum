@@ -22,6 +22,8 @@ import config
 import data as data_mod
 import signals as signals_mod
 import portfolio as portfolio_mod
+import portfolio_v2
+import momentum_rank
 import state
 import notifications
 
@@ -50,6 +52,7 @@ def generate_memo(
     target_weights: dict,
     prior_weights: dict,
     trades: list,
+    momentum_signal=None,
 ) -> str:
     """Generate markdown memo for the monthly rebalance."""
     gem_signal = gem.get("gem_signal", "N/A")
@@ -93,25 +96,46 @@ def generate_memo(
         f"| Override | {'YES' if override else 'NO'} | — | — |",
         f"| Yield Curve | {yc.get('t10y2y', 'N/A')}% ({yc.get('status', 'N/A')}) | — | monitoring only |",
         "",
-        "## GEM Detail",
+        "## Stage 1: GEM Absolute Momentum",
         "",
         f"- SPY 12M return: {gem.get('spy_12m_return', 0):+.1%}",
         f"- EFA 12M return: {gem.get('efa_12m_return', 0):+.1%}",
         f"- BIL 12M return: {gem.get('bil_12m_return', 0):+.1%}",
-        f"- Relative winner: {gem.get('relative_winner', 'N/A')}",
         f"- Absolute momentum pass: {'YES' if gem.get('absolute_pass') else 'NO'}",
         "",
+    ]
+
+    # Momentum ranking section
+    lines.append("## Stage 2: Momentum Ranking")
+    lines.append("")
+    if momentum_signal is not None:
+        lines.append(f"Metric: {momentum_signal.ranking_metric} | Available: {momentum_signal.available_assets} assets")
+        lines.append("")
+        lines.append("| Ticker | 12-1M Return | Tercile | Risky Weight |")
+        lines.append("|---|---|---|---|")
+        import numpy as _np
+        for ticker in sorted(momentum_signal.ranks.keys(), key=lambda t: momentum_signal.ranks.get(t, 99)):
+            raw = momentum_signal.raw_momentum.get(ticker, float('nan'))
+            raw_s = f"{raw:+.1%}" if not _np.isnan(raw) else "N/A"
+            terc = momentum_signal.terciles.get(ticker, "N/A")
+            rw = momentum_signal.risky_weights.get(ticker, 0.0)
+            lines.append(f"| {ticker} | {raw_s} | {terc} | {rw:.0%} |")
+    else:
+        lines.append("- Momentum ranking not computed")
+    lines.append("")
+
+    lines.extend([
         "## Target Allocation",
         "",
         "| ETF | Weight | Prior | Change |",
         "|---|---|---|---|",
-    ]
+    ])
 
-    for ticker in config.ALL_TICKERS:
+    for ticker in portfolio_v2.ALL_TICKERS:
         tw = target_weights.get(ticker, 0)
         pw = prior_weights.get(ticker, 0)
         change = tw - pw
-        if tw > 0 or pw > 0:
+        if tw > 0.001 or pw > 0.001:
             change_str = f"{change:+.0%}" if abs(change) > 1e-6 else "—"
             lines.append(f"| {ticker} | {tw:.0%} | {pw:.0%} | {change_str} |")
 
@@ -152,7 +176,7 @@ def run(force: bool = False):
         return 0
 
     print(f"\n{'=' * 60}")
-    print(f"  Dual Momentum + HY Spread: Monthly Rebalance")
+    print(f"  Three-Stage TAA: Monthly Rebalance")
     print(f"  {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 60}\n")
 
@@ -167,7 +191,7 @@ def run(force: bool = False):
         print(f"*** ERROR: Data fetch failed: {e} ***")
         sys.exit(1)
 
-    # 2. Compute signals
+    # 2. Compute signals (all three stages)
     as_of = prices.index[-1]
     as_of_str = as_of.strftime("%Y-%m-%d")
 
@@ -177,10 +201,12 @@ def run(force: bool = False):
     )
     gem = all_signals["gem"]
     hy = all_signals["hy_regime"]
+    mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
 
-    # 3. Get target weights
-    target_weights = portfolio_mod.construct_portfolio(gem, hy)
+    # 3. Get target weights (three-stage v2)
+    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    target_weights = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     # 4. Get prior portfolio
     prior_weights = state.get_current_portfolio()
@@ -189,7 +215,7 @@ def run(force: bool = False):
     trades = portfolio_mod.compute_trades(prior_weights, target_weights)
 
     # 6. Log
-    state.log_daily(as_of_str, gem, hy, yc)
+    state.log_daily(as_of_str, gem, hy, yc, momentum_signal=mom)
     state.log_monthly(
         date=as_of_str,
         target_weights=target_weights,
@@ -200,7 +226,8 @@ def run(force: bool = False):
     )
 
     # 7. Generate memo
-    memo = generate_memo(as_of_str, gem, hy, yc, target_weights, prior_weights, trades)
+    memo = generate_memo(as_of_str, gem, hy, yc, target_weights, prior_weights, trades,
+                         momentum_signal=mom)
 
     # Save memo
     config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
