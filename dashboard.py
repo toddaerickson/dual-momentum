@@ -1,5 +1,5 @@
 """
-Streamlit Dashboard: Three-Stage TAA Model Portfolio
+Streamlit Dashboard: Asset Class Momentum w HY
 
 Run:
   streamlit run dashboard.py
@@ -26,12 +26,12 @@ import performance
 # Page Config
 # ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="Three-Stage TAA Dashboard",
+    page_title="Asset Class Momentum w HY",
     page_icon="📊",
     layout="wide",
 )
 
-st.title("Three-Stage TAA Model Portfolio")
+st.title("Asset Class Momentum w HY")
 
 
 # ──────────────────────────────────────────────
@@ -1073,7 +1073,7 @@ If performance is highly sensitive to a specific parameter, that's a fragility w
 # ──────────────────────────────────────────────
 st.divider()
 st.caption(
-    "Three-Stage TAA Model Portfolio: Absolute Momentum + Cross-Asset Ranking + HY Regime. "
+    "Asset Class Momentum w HY: Absolute Momentum + Cross-Asset Ranking + HY Regime. "
     "Signals are rules-based with no discretion. "
     "Past performance does not guarantee future results."
 )
