@@ -55,7 +55,7 @@ def generate_memo(
     momentum_signal=None,
 ) -> str:
     """Generate markdown memo for the monthly rebalance."""
-    gem_signal = gem.get("gem_signal", "N/A")
+    abs_pass = gem.get("absolute_pass", False)
     regime = hy.get("regime", "N/A")
     regime_primary = hy.get("regime_primary", "N/A")
     ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
@@ -67,18 +67,19 @@ def generate_memo(
     override = hy.get("fast_widen_override", False)
 
     # Determine prior month values from state
-    prior_gem = "—"
+    prior_abs_pass = "—"
     prior_regime = "—"
     try:
         hist = state.get_signal_history(60)
         if len(hist) >= 2:
             prev = hist.iloc[-2]
-            prior_gem = str(prev.get("gem_signal", "—"))
+            prior_abs_pass = str(prev.get("absolute_pass", "—"))
             prior_regime = str(prev.get("hy_regime", "—"))
     except Exception:
         pass
 
-    gem_changed = "CHANGED" if gem_signal != prior_gem else "—"
+    abs_pass_str = "PASS" if abs_pass else "FAIL"
+    abs_changed = "CHANGED" if abs_pass_str != prior_abs_pass else "—"
     regime_changed = "CHANGED" if regime != prior_regime else "—"
 
     # Build memo
@@ -89,19 +90,19 @@ def generate_memo(
         "",
         "| Signal | Value | Prior Month | Change |",
         "|---|---|---|---|",
-        f"| GEM | {gem_signal} | {prior_gem} | {gem_changed} |",
+        f"| Abs Momentum | {abs_pass_str} | {prior_abs_pass} | {abs_changed} |",
         f"| CCC-BB Spread | {ccc_bb:.0f} bps (pctl: {ccc_bb_pctl:.0f}) | — | — |",
         f"| Single-B OAS | {b_oas:.0f} bps (pctl: {b_pctl:.0f}) | {hy.get('hy_b_3m_ago', '—')} bps (3mo ago) | {b_change:+.0f} bps |",
         f"| HY Regime | {regime} (primary: {regime_primary}) | {prior_regime} | {regime_changed} |",
         f"| Override | {'YES' if override else 'NO'} | — | — |",
         f"| Yield Curve | {yc.get('t10y2y', 'N/A')}% ({yc.get('status', 'N/A')}) | — | monitoring only |",
         "",
-        "## Stage 1: GEM Absolute Momentum",
+        "## Stage 1: Absolute Momentum Gate",
         "",
         f"- SPY 12M return: {gem.get('spy_12m_return', 0):+.1%}",
         f"- EFA 12M return: {gem.get('efa_12m_return', 0):+.1%}",
         f"- BIL 12M return: {gem.get('bil_12m_return', 0):+.1%}",
-        f"- Absolute momentum pass: {'YES' if gem.get('absolute_pass') else 'NO'}",
+        f"- Absolute momentum: {'PASS' if abs_pass else 'FAIL'}",
         "",
     ]
 
@@ -152,7 +153,7 @@ def generate_memo(
         "",
         "## Decision Matrix State",
         "",
-        f"- GEM signal: **{gem_signal}**",
+        f"- Absolute momentum: **{abs_pass_str}**",
         f"- HY regime: **{regime}** (primary: {regime_primary})",
         f"- CCC-BB spread: {ccc_bb:.0f} bps (percentile: {ccc_bb_pctl:.0f})",
         f"- Single-B OAS: {b_oas:.0f} bps (percentile: {b_pctl:.0f})",
@@ -204,8 +205,8 @@ def run(force: bool = False):
     mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
 
-    # 3. Get target weights (three-stage v2)
-    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    # 3. Get target weights (three-stage)
+    target_v2 = portfolio_mod.construct_portfolio(gem, hy, mom)
     target_weights = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     # 4. Get prior portfolio
@@ -219,7 +220,7 @@ def run(force: bool = False):
     state.log_monthly(
         date=as_of_str,
         target_weights=target_weights,
-        gem_signal=gem.get("gem_signal", "N/A"),
+        gem_signal=gem.get("absolute_pass", False),
         hy_regime=hy.get("regime", "N/A"),
         prior_weights=prior_weights,
         trades=trades,

@@ -132,19 +132,16 @@ if view == "Current Signals":
     hy = all_signals["hy_regime"]
     mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
-    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
-    target = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
+    target_full = portfolio_mod.construct_portfolio(gem, hy, mom)
+    target = {k: v for k, v in target_full.items() if k != "_metadata" and isinstance(v, (int, float))}
 
     st.subheader(f"Signals as of {as_of.strftime('%Y-%m-%d')}")
 
     # Key metrics row
     col1, col2, col3, col4 = st.columns(4)
 
-    gem_signal = gem.get("gem_signal", "N/A")
-    gem_colors = {"SPY": "green", "EFA": "blue", "SHY": "orange"}
-    gem_labels = {"SPY": "US Equities", "EFA": "Intl Equities", "SHY": "Short Treasuries"}
-
-    col1.metric("GEM Signal", f"{gem_signal}", gem_labels.get(gem_signal, ""))
+    abs_pass = gem.get("absolute_pass", False)
+    col1.metric("Abs Momentum", "PASS" if abs_pass else "FAIL")
     col2.metric(
         "HY Regime",
         hy.get("regime", "N/A"),
@@ -161,7 +158,6 @@ if view == "Current Signals":
     st.divider()
 
     # ── Plain English Summary ──
-    gem_signal = gem.get("gem_signal", "N/A")
     regime = hy.get("regime", "N/A")
     regime_primary = hy.get("regime_primary", "N/A")
     ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
@@ -175,28 +171,20 @@ if view == "Current Signals":
     efa_ret = gem.get("efa_12m_return", 0)
     bil_ret = gem.get("bil_12m_return", 0)
     abs_pass = gem.get("absolute_pass", False)
-    rel_winner = gem.get("relative_winner", "N/A")
 
-    # GEM explanation
-    if gem_signal == "SPY":
+    # Absolute momentum explanation
+    if abs_pass:
         gem_english = (
-            f"US stocks (SPY) returned **{spy_ret:+.1%}** over the past 12 months, "
-            f"beating international stocks (EFA) at **{efa_ret:+.1%}** and comfortably "
-            f"clearing the T-bill hurdle of **{bil_ret:+.1%}**. "
-            "Momentum favors staying in US equities."
-        )
-    elif gem_signal == "EFA":
-        gem_english = (
-            f"International stocks (EFA) returned **{efa_ret:+.1%}** over the past 12 months, "
-            f"beating US stocks (SPY) at **{spy_ret:+.1%}** and clearing "
-            f"the T-bill hurdle of **{bil_ret:+.1%}**. "
-            "Momentum favors international equities."
+            f"US stocks (SPY) returned **{spy_ret:+.1%}** and international stocks (EFA) "
+            f"returned **{efa_ret:+.1%}** over the past 12 months, "
+            f"with the best clearing the T-bill hurdle of **{bil_ret:+.1%}**. "
+            "Absolute momentum passes — equities are favored."
         )
     else:
         gem_english = (
             f"Neither US stocks (**{spy_ret:+.1%}**) nor international stocks (**{efa_ret:+.1%}**) "
             f"beat T-bills (**{bil_ret:+.1%}**) over the past 12 months. "
-            "Momentum says step aside into short-term Treasuries until equities recover."
+            "Absolute momentum fails — step aside into short-term Treasuries until equities recover."
         )
 
     # Regime explanation (dual-signal)
@@ -247,7 +235,7 @@ if view == "Current Signals":
     abs_margin = max(spy_ret, efa_ret) - bil_ret
 
     conviction_parts = []
-    if gem_signal in ("SPY", "EFA"):
+    if abs_pass:
         if margin > 0.10:
             conviction_parts.append("The relative momentum gap is wide — high conviction in the equity pick.")
         elif margin > 0.03:
@@ -296,7 +284,7 @@ if view == "Current Signals":
     st.subheader("What This Means")
 
     st.markdown(f"""
-**Stage 1 — Absolute Momentum (GEM):** {gem_english}
+**Stage 1 — Absolute Momentum:** {gem_english}
 
 **Stage 2 — Momentum Ranking:** The model ranks 6 risky assets (SPY, EFA, EEM, VNQ, DBC, GLD) by vol-adjusted 12-1 month momentum and allocates to the top and middle terciles.
 
@@ -313,11 +301,11 @@ if view == "Current Signals":
 
     st.divider()
 
-    # Three-column layout: GEM, Momentum Ranking, Target Portfolio
+    # Three-column layout: Abs Momentum, Momentum Ranking, Target Portfolio
     col_gem, col_mom, col_target = st.columns(3)
 
     with col_gem:
-        st.subheader("Stage 1: GEM")
+        st.subheader("Stage 1: Absolute Momentum")
         gem_data = {
             "Metric": ["SPY 12M Return", "EFA 12M Return", "BIL 12M Return", "Absolute Pass"],
             "Value": [
@@ -486,32 +474,6 @@ elif view == "Signal History":
         )
         st.plotly_chart(fig_hy, use_container_width=True)
 
-        # ── Chart 2: GEM Signal ──
-        if not sig_hist.empty and "gem_signal" in sig_hist.columns:
-            fig_gem_hist = go.Figure()
-            gem_colors_map = {"SPY": "#2ecc71", "EFA": "#3498db", "SHY": "#f39c12"}
-            gem_numeric = sig_hist["gem_signal"].map({"SPY": 2, "EFA": 1, "SHY": 0})
-            fig_gem_hist.add_trace(
-                go.Scatter(
-                    x=sig_hist["date"], y=gem_numeric,
-                    mode="markers+lines",
-                    name="GEM Signal",
-                    marker=dict(
-                        color=[gem_colors_map.get(s, "#95a5a6") for s in sig_hist["gem_signal"]],
-                        size=8,
-                    ),
-                    line=dict(color="#95a5a6", width=1),
-                ),
-            )
-            fig_gem_hist.update_layout(
-                title="GEM Signal History",
-                height=200,
-                margin=dict(t=40, b=20, l=60, r=60),
-                yaxis=dict(tickvals=[0, 1, 2], ticktext=["SHY", "EFA", "SPY"]),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_gem_hist, use_container_width=True)
-
     except Exception as e:
         st.warning(f"Could not load market data for chart: {e}")
 
@@ -530,7 +492,7 @@ elif view == "SPY + Regimes":
     with st.spinner("Running backtest to extract regime history..."):
         try:
             results = load_backtest_results()
-            bt = results["gem_hy"]
+            bt = results["momentum_hy"]
         except Exception as e:
             st.error(f"Backtest failed: {e}")
             st.info("Ensure FRED_API_KEY is set and you have internet access.")
@@ -548,10 +510,11 @@ elif view == "SPY + Regimes":
     spy_bt = spy_prices[spy_prices.index >= bt.index[0]]
     spy_bt = spy_bt[spy_bt.index <= bt.index[-1]]
 
-    # Build a combined regime label from GEM signal + HY regime
-    # Map regime for each trading day from the backtest
-    regime_map = bt[["gem_signal", "hy_regime"]].copy()
-    regime_map["combined"] = regime_map["gem_signal"] + " / " + regime_map["hy_regime"]
+    # Build regime map from backtest — use absolute_pass and hy_regime
+    regime_cols = ["hy_regime"]
+    if "absolute_pass" in bt.columns:
+        regime_cols.insert(0, "absolute_pass")
+    regime_map = bt[regime_cols].copy()
 
     # Reindex to match SPY prices (forward-fill regime for non-rebalance days)
     regime_aligned = regime_map.reindex(spy_bt.index, method="ffill")
@@ -622,75 +585,11 @@ elif view == "SPY + Regimes":
     )
     st.plotly_chart(fig_hy, use_container_width=True)
 
-    # ── Chart 2: SPY colored by GEM Signal ──
-    st.markdown("#### SPY by GEM Momentum Signal")
-    st.caption("Line color = which asset GEM recommends holding. Green = SPY, Blue = EFA, Orange = SHY (risk-off).")
-
-    gem_line_colors = {"SPY": "#2ecc71", "EFA": "#3498db", "SHY": "#f39c12"}
-    gem_bg_colors = {
-        "SPY": "rgba(46, 204, 113, 0.12)",
-        "EFA": "rgba(52, 152, 219, 0.12)",
-        "SHY": "rgba(243, 156, 18, 0.18)",
-    }
-
-    fig_gem = go.Figure()
-
-    gem_signals = regime_aligned["gem_signal"]
-    gem_changes = gem_signals.ne(gem_signals.shift()).cumsum()
-
-    # 1. Background shading first (behind everything)
-    for _, group in regime_aligned.groupby(gem_changes):
-        gem_val = group["gem_signal"].iloc[0]
-        x0 = group.index[0]
-        x1 = group.index[-1]
-        bg_color = gem_bg_colors.get(gem_val, "rgba(128,128,128,0.1)")
-        fig_gem.add_vrect(x0=x0, x1=x1, fillcolor=bg_color, line_width=0, layer="below")
-
-    # 2. SPY line segments on top
-    for _, group in regime_aligned.groupby(gem_changes):
-        gem_val = group["gem_signal"].iloc[0]
-        idx = group.index
-        spy_segment = spy_bt.loc[idx]
-        color = gem_line_colors.get(gem_val, "#95a5a6")
-
-        fig_gem.add_trace(go.Scatter(
-            x=spy_segment.index,
-            y=spy_segment.values,
-            mode="lines",
-            line=dict(color=color, width=2),
-            name=gem_val,
-            showlegend=False,
-            hovertemplate=f"GEM: {gem_val}<br>SPY: $%{{y:.2f}}<br>%{{x}}<extra></extra>",
-        ))
-
-    # Legend entries
-    gem_labels = {"SPY": "Hold SPY (US)", "EFA": "Hold EFA (Intl)", "SHY": "Hold SHY (Defensive)"}
-    for gem_val, color in gem_line_colors.items():
-        fig_gem.add_trace(go.Scatter(
-            x=[None], y=[None], mode="lines",
-            line=dict(color=color, width=4),
-            name=gem_labels.get(gem_val, gem_val), showlegend=True,
-        ))
-
-    fig_gem.update_layout(
-        title="SPY Price by GEM Signal",
-        yaxis_title="SPY Price ($)",
-        yaxis_type="log",
-        height=500,
-        hovermode="x unified",
-        margin=dict(t=40, b=20, l=60, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, title="GEM Signal"),
-    )
-    st.plotly_chart(fig_gem, use_container_width=True)
-
     # ── Metrics table: same as Backtest Performance ──
     st.subheader("Strategy Comparison")
     all_metrics = {}
     strategy_labels = {
         "momentum_hy": "Momentum + HY (3-Stage)",
-        "gem_hy": "GEM + HY Overlay",
-        "gem_pure": "GEM Pure",
-        "gem_floor": "GEM Floor (70%)",
         "sixty_forty": "60/40",
         "buy_hold": "Buy & Hold SPY",
     }
@@ -732,17 +631,11 @@ elif view == "Backtest Performance":
     fig = go.Figure()
     strategy_colors = {
         "momentum_hy": "#1abc9c",
-        "gem_hy": "#2ecc71",
-        "gem_pure": "#3498db",
-        "gem_floor": "#9b59b6",
         "sixty_forty": "#e67e22",
         "buy_hold": "#e74c3c",
     }
     strategy_labels = {
         "momentum_hy": "Momentum + HY (3-Stage)",
-        "gem_hy": "GEM + HY Overlay",
-        "gem_pure": "GEM Pure",
-        "gem_floor": "GEM Floor (70%)",
         "sixty_forty": "60/40",
         "buy_hold": "Buy & Hold SPY",
     }
@@ -839,15 +732,14 @@ elif view == "Backtest Performance":
     )
     st.plotly_chart(fig_annual, use_container_width=True)
 
-    # ── Monthly Returns Heatmap (gem_hy) ──
-    # Use momentum_hy if available, else gem_hy
-    heatmap_strategy = "momentum_hy" if "momentum_hy" in results else "gem_hy"
+    # ── Monthly Returns Heatmap ──
+    heatmap_strategy = "momentum_hy"
     heatmap_label = strategy_labels.get(heatmap_strategy, heatmap_strategy)
     st.subheader(f"Monthly Returns Heatmap ({heatmap_label})")
-    gem_hy_df = results[heatmap_strategy].copy()
-    gem_hy_df["year"] = gem_hy_df.index.year
-    gem_hy_df["month"] = gem_hy_df.index.month
-    monthly = gem_hy_df.groupby(["year", "month"])["daily_return"].apply(
+    heatmap_df = results[heatmap_strategy].copy()
+    heatmap_df["year"] = heatmap_df.index.year
+    heatmap_df["month"] = heatmap_df.index.month
+    monthly = heatmap_df.groupby(["year", "month"])["daily_return"].apply(
         lambda x: (1 + x).prod() - 1
     ).unstack(level="month")
     monthly.columns = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -914,11 +806,11 @@ elif view == "Allocation Over Time":
 
     if port_hist.empty:
         # Fall back to backtest data
-        st.info("No live portfolio history. Showing backtest allocation for gem_hy strategy.")
+        st.info("No live portfolio history. Showing backtest allocation for momentum_hy strategy.")
         with st.spinner("Running backtest..."):
             try:
                 results = load_backtest_results()
-                bt = results["gem_hy"]
+                bt = results["momentum_hy"]
             except Exception as e:
                 st.error(f"Backtest failed: {e}")
                 st.stop()
@@ -987,32 +879,9 @@ elif view == "Allocation Over Time":
 
     # Regime history from backtest
     if port_hist.empty:
-        bt = results["gem_hy"]
-        regime_colors = {
-            "TIGHT": "#2ecc71", "NORMAL": "#3498db",
-            "STRESSED": "#f39c12", "CRISIS": "#e74c3c",
-        }
+        bt = results["momentum_hy"]
 
-        fig_regime = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=("GEM Signal", "HY Regime"),
-            row_heights=[0.5, 0.5],
-        )
-
-        gem_numeric = bt["gem_signal"].map({"SPY": 2, "EFA": 1, "SHY": 0})
-        fig_regime.add_trace(
-            go.Scatter(
-                x=bt.index, y=gem_numeric,
-                mode="lines", name="GEM",
-                line=dict(color="#3498db", width=1),
-            ),
-            row=1, col=1,
-        )
-        fig_regime.update_yaxes(
-            tickvals=[0, 1, 2], ticktext=["SHY", "EFA", "SPY"],
-            row=1, col=1,
-        )
+        fig_regime = go.Figure()
 
         regime_numeric = bt["hy_regime"].map({
             "TIGHT": 0, "NORMAL": 1, "STRESSED": 2, "CRISIS": 3,
@@ -1023,15 +892,17 @@ elif view == "Allocation Over Time":
                 mode="lines", name="HY Regime",
                 line=dict(color="#e67e22", width=1),
             ),
-            row=2, col=1,
         )
         fig_regime.update_yaxes(
             tickvals=[0, 1, 2, 3],
             ticktext=["TIGHT", "NORMAL", "STRESSED", "CRISIS"],
-            row=2, col=1,
         )
 
-        fig_regime.update_layout(height=350, showlegend=False, margin=dict(t=40, b=20, l=60, r=20))
+        fig_regime.update_layout(
+            title="HY Regime Over Time",
+            height=300, showlegend=False,
+            margin=dict(t=40, b=20, l=60, r=20),
+        )
         st.plotly_chart(fig_regime, use_container_width=True)
 
 
@@ -1043,111 +914,12 @@ elif view == "Parameter Sensitivity":
     st.subheader("Parameter Sensitivity Analysis")
     st.caption("How robust are the current parameters? Sweep lookback periods and HY thresholds to find out.")
 
-    # ── GEM Lookback Sweep ──
-    st.markdown("#### GEM Lookback Period")
-    st.caption("Current setting: 12 months. Testing 3, 6, 9, 12, 15, 18 months.")
-
-    lookback_months = [3, 6, 9, 12, 15, 18]
-
-    @st.cache_data(ttl=3600)
-    def run_lookback_sweep():
-        """Run gem_hy backtest with different lookback periods."""
-        all_data = data_mod.fetch_all()
-        prices = all_data["prices"]
-        hy_spread = all_data["hy_spread"]
-        ccc_bb_spread = all_data["ccc_bb_spread"]
-        hy_b_spread = all_data["hy_b_spread"]
-        daily_returns = prices.pct_change().fillna(0)
-
-        start_date = config.BACKTEST_START
-        end_date = prices.index[-1].strftime("%Y-%m-%d")
-
-        # Get rebalance dates
-        mask = (prices.index >= pd.Timestamp(start_date)) & (prices.index <= pd.Timestamp(end_date))
-        filtered = prices[mask]
-        month_ends = filtered.groupby(filtered.index.to_period("M")).apply(lambda x: x.index[-1])
-        rebalance_dates = set(month_ends)
-
-        sweep_results = {}
-        for lb in lookback_months:
-            current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
-            results_list = []
-            tc_bps = config.TRANSACTION_COST_BPS / 10000
-
-            for date in daily_returns[mask].index:
-                if date in rebalance_dates:
-                    gem_sig = signals_mod.compute_gem_signal(prices, date, lookback_months=lb)
-                    hy_available = (len(ccc_bb_spread) > 0 and len(hy_b_spread) > 0
-                                    and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM))
-                    if hy_available:
-                        hy_reg = signals_mod.compute_hy_regime(
-                            ccc_bb_spread, hy_b_spread, date, hy_spread=hy_spread)
-                    else:
-                        hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
-
-                    target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
-                    tc = sum(tc_bps for t in config.ALL_TICKERS
-                             if abs(target_weights.get(t, 0) - current_weights.get(t, 0)) > 1e-6)
-                    current_weights = target_weights
-
-                day_ret = sum(
-                    current_weights.get(t, 0) * daily_returns.loc[date].get(t, 0)
-                    for t in config.ALL_TICKERS if t in daily_returns.columns
-                )
-                if date in rebalance_dates:
-                    day_ret -= tc
-                results_list.append({"date": date, "daily_return": day_ret})
-
-            df = pd.DataFrame(results_list).set_index("date")
-            df["cumulative"] = (1 + df["daily_return"]).cumprod()
-            sweep_results[lb] = df
-
-        return sweep_results
-
-    with st.spinner("Running lookback sweep..."):
-        try:
-            lookback_results = run_lookback_sweep()
-        except Exception as e:
-            st.error(f"Lookback sweep failed: {e}")
-            st.stop()
-
-    # Equity curves
-    fig_lb = go.Figure()
-    lb_colors = {3: "#e74c3c", 6: "#e67e22", 9: "#f1c40f", 12: "#2ecc71", 15: "#3498db", 18: "#9b59b6"}
-    for lb, df in lookback_results.items():
-        label = f"{lb}M" + (" (current)" if lb == 12 else "")
-        width = 2.5 if lb == 12 else 1.5
-        fig_lb.add_trace(go.Scatter(
-            x=df.index, y=df["cumulative"],
-            name=label,
-            line=dict(color=lb_colors.get(lb, "#95a5a6"), width=width),
-        ))
-
-    fig_lb.update_layout(
-        title="Growth of $1 by GEM Lookback Period",
-        yaxis_title="Cumulative Value ($)",
-        yaxis_type="log",
-        height=450,
-        hovermode="x unified",
-        margin=dict(t=40, b=20, l=60, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    # ── Absolute Momentum Lookback ──
+    st.markdown("#### Absolute Momentum Lookback")
+    st.info(
+        "The absolute momentum filter uses a fixed **12-month** lookback (12-1 month excess return over T-bills). "
+        "This is the standard setting from the academic literature and is not swept here."
     )
-    st.plotly_chart(fig_lb, use_container_width=True)
-
-    # Metrics comparison
-    lb_metrics = {}
-    for lb, df in lookback_results.items():
-        m = performance.compute_metrics(df)
-        label = f"{lb}M" + (" *" if lb == 12 else "")
-        lb_metrics[label] = {
-            "CAGR": f"{m['cagr']:+.1%}",
-            "Max Drawdown": f"{m['max_drawdown']:.1%}",
-            "Volatility": f"{m['ann_volatility']:.1%}",
-            "Sharpe": f"{m['sharpe']:.2f}",
-            "Sortino": f"{m['sortino']:.2f}",
-        }
-    st.dataframe(pd.DataFrame(lb_metrics), use_container_width=True)
-    st.caption("* = current setting")
 
     # ── HY Threshold Sweep ──
     st.markdown("#### HY Regime Percentile Thresholds")
@@ -1155,7 +927,7 @@ elif view == "Parameter Sensitivity":
 
     @st.cache_data(ttl=3600)
     def run_threshold_sweep():
-        """Run gem_hy backtest with different CCC-BB percentile threshold sets."""
+        """Run momentum_hy backtest with different CCC-BB percentile threshold sets."""
         all_data = data_mod.fetch_all()
         prices = all_data["prices"]
         hy_spread = all_data["hy_spread"]
@@ -1186,7 +958,7 @@ elif view == "Parameter Sensitivity":
 
             for date in daily_returns[mask].index:
                 if date in rebalance_dates:
-                    gem_sig = signals_mod.compute_gem_signal(prices, date)
+                    gem_sig = signals_mod.compute_absolute_momentum(prices, date)
 
                     hy_available = (len(ccc_bb_spread) > 0 and len(hy_b_spread) > 0
                                     and date >= pd.Timestamp(config.HY_OAS_AVAILABLE_FROM))
@@ -1247,10 +1019,10 @@ elif view == "Parameter Sensitivity":
     # Equity curves
     fig_th = go.Figure()
     th_colors = {
-        "Tight (250/400/600)": "#e74c3c",
-        "Current (350/500/700)": "#2ecc71",
-        "Wide (450/600/800)": "#3498db",
-        "Very Wide (500/700/900)": "#9b59b6",
+        "Tight (15/50/75)": "#e74c3c",
+        "Current (25/60/85)": "#2ecc71",
+        "Wide (35/70/90)": "#3498db",
+        "Very Wide (40/75/95)": "#9b59b6",
     }
     for label, df in threshold_results.items():
         width = 2.5 if "Current" in label else 1.5
@@ -1296,7 +1068,7 @@ If performance is highly sensitive to a specific parameter, that's a fragility w
 # ──────────────────────────────────────────────
 st.divider()
 st.caption(
-    "Three-Stage TAA Model Portfolio: GEM Absolute Momentum + Cross-Asset Ranking + HY Regime. "
+    "Three-Stage TAA Model Portfolio: Absolute Momentum + Cross-Asset Ranking + HY Regime. "
     "Signals are rules-based with no discretion. "
     "Past performance does not guarantee future results."
 )

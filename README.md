@@ -6,7 +6,7 @@ A rules-based tactical asset allocation system with three independent stages: ab
 
 Three stages run every month. Their combination determines how to allocate across nine ETFs.
 
-**Stage 1 -- GEM Absolute Momentum (Crash Avoidance)**
+**Stage 1 -- Absolute Momentum Gate (Crash Avoidance)**
 
 Checks whether the best equity market (SPY or EFA) beats T-bills (BIL) over the trailing 12 months. If neither clears the hurdle, the model moves entirely to short-term Treasuries. This is a binary gate: pass or fail.
 
@@ -51,7 +51,7 @@ The Single-B OAS acts as a confirmation signal. When it is also elevated (>= 75t
 
 | Stage | Signal | Output |
 |-------|--------|--------|
-| **Stage 1** | GEM absolute momentum (equity winner vs BIL) | PASS (proceed) or FAIL (100% SHY) |
+| **Stage 1** | Absolute momentum (best equity 12M vs BIL) | PASS (proceed) or FAIL (100% SHY) |
 | **Stage 2** | 6-asset momentum ranking (vol-adjusted 12-1M) | Risky asset weights (sums to 1.0) |
 | **Stage 3** | HY regime (CCC-BB percentile + Single-B confirmation) | Risk budget sizing |
 
@@ -111,12 +111,12 @@ Interactive Streamlit dashboard with six views:
 
 | View | What You See |
 |------|-------------|
-| **Current Signals** | Three-stage signals: GEM absolute momentum, momentum ranking table (terciles, scores, weights), HY regime, target allocation, plain English interpretation |
-| **Signal History** | Composite HY OAS time series with legacy regime bands, GEM signal timeline |
-| **SPY + Regimes** | SPY price history colored by HY regime and GEM signal |
+| **Current Signals** | Three-stage signals: absolute momentum gate, momentum ranking table (terciles, scores, weights), HY regime, target allocation, plain English interpretation |
+| **Signal History** | Composite HY OAS time series with regime bands |
+| **SPY + Regimes** | SPY price history colored by credit regime |
 | **Backtest Performance** | Equity curves, drawdowns, annual returns, monthly heatmap, rolling Sharpe |
 | **Allocation Over Time** | Stacked area chart of portfolio weights over the backtest period |
-| **Parameter Sensitivity** | Sweep GEM lookback (3-18 months) and CCC-BB percentile thresholds to test robustness |
+| **Parameter Sensitivity** | Sweep CCC-BB percentile thresholds to test robustness |
 
 ## Notifications
 
@@ -161,11 +161,11 @@ Windows users can use `run_weekly.bat` with Task Scheduler.
 dual-momentum/
 ├── config.py              # All constants, thresholds, FRED series, paths
 ├── data.py                # FRED + yfinance fetching with 12-hour cache
-├── signals.py             # Three-stage signal computation (GEM + momentum + HY)
+├── signals.py             # Three-stage signal computation (abs momentum + momentum ranking + HY)
 ├── momentum_rank.py       # Cross-asset 12-1 month momentum ranking module
-├── portfolio.py           # Legacy decision matrix + v2 delegation
+├── portfolio.py           # Portfolio constructor (delegates to portfolio_v2)
 ├── portfolio_v2.py        # Three-stage portfolio constructor
-├── backtest.py            # Historical simulation engine (6 strategies)
+├── backtest.py            # Historical simulation engine (3 strategies)
 ├── performance.py         # CAGR, Sharpe, drawdown, comparison tables
 ├── state.py               # Persistent CSV logging of signals and portfolio
 ├── notifications.py       # Email, Slack, SMS alert dispatcher
@@ -188,8 +188,8 @@ dual-momentum/
 
 - **Period:** 1980-present (extended via index proxies)
 - **Pre-ETF substitutions:** ^GSPC for SPY (pre-1993), FRED DTB3 for BIL (pre-2007), FRED GS1 for SHY (pre-2002), JNK for ANGL (pre-2012)
-- **Pre-EFA (pre-2001):** GEM runs absolute momentum only -- SPY vs T-bills, no international comparison
-- **Pre-HY OAS (pre-1997):** Strategies using HY overlay fall back to GEM-only
+- **Pre-EFA (pre-2001):** Absolute momentum uses SPY only (no EFA comparison)
+- **Pre-HY OAS (pre-1997):** Falls back to absolute momentum + ranking only (no HY overlay)
 - **Transaction costs:** 5 bps per position change
 - **Rebalance:** Last business day of each month
 
@@ -197,10 +197,7 @@ dual-momentum/
 
 | Strategy | Description |
 |----------|-------------|
-| `momentum_hy` | Full model: three-stage (GEM abs momentum + momentum ranking + HY regime) |
-| `gem_hy` | Legacy: GEM binary signal + dual-signal HY regime overlay |
-| `gem_pure` | GEM only, no HY overlay (control) |
-| `gem_floor` | GEM + HY overlay with 70% minimum equity floor |
+| `momentum_hy` | Full model: three-stage (abs momentum gate + momentum ranking + HY regime) |
 | `sixty_forty` | 60% SPY / 40% SHY, monthly rebalance (control) |
 | `buy_hold` | 100% SPY buy-and-hold (control) |
 
@@ -229,7 +226,7 @@ All parameters live in `config.py`. Key settings:
 ## Known Limitations
 
 1. **Concurrent stock-bond selloff (2022).** Both equities and SHY fall. SHY's short duration limits the damage (~4% loss vs ~13% for AGG) but does not eliminate it.
-2. **12-month lookback lag.** GEM is slow to react. The HY overlay partially compensates. A flash crash that resolves within a month won't trigger either signal.
+2. **12-month lookback lag.** The absolute momentum gate is slow to react. The HY overlay partially compensates. A flash crash that resolves within a month won't trigger either signal.
 3. **WIDENING_FAST is speculative.** Small historical sample (2008, 2020, possibly 2011). May whipsaw. The Parameter Sensitivity view lets you backtest with and without.
 4. **SHY underperforms long bonds in rate cuts.** Explicit tradeoff for term-premium protection.
 5. **ANGL pre-2012.** Uses JNK proxy with different credit quality characteristics.

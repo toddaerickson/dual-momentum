@@ -205,8 +205,10 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
         (subject, body, short_body) tuple
     """
     parts = []
-    if changes.get("gem_changed"):
-        parts.append(f"GEM: {changes.get('previous_gem')} -> {changes.get('current_gem')}")
+    if changes.get("abs_mom_changed"):
+        curr = "PASS" if changes.get("current_abs_pass") else "FAIL"
+        prev = "PASS" if changes.get("previous_abs_pass") else "FAIL"
+        parts.append(f"Abs Momentum: {prev} -> {curr}")
     if changes.get("regime_changed"):
         parts.append(f"HY Regime: {changes.get('previous_regime')} -> {changes.get('current_regime')}")
     if changes.get("override_activated"):
@@ -215,7 +217,7 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
     subject = "DM Signal Change: " + " | ".join(parts)
 
     # Full body
-    gem_signal = gem.get("gem_signal", "N/A")
+    abs_pass = gem.get("absolute_pass", False)
     regime = hy.get("regime", "N/A")
     ccc_bb = hy.get("ccc_bb_spread_current", 0) or 0
     ccc_bb_pctl = hy.get("ccc_bb_percentile", 0) or 0
@@ -233,7 +235,7 @@ def format_signal_alert(changes: dict, gem: dict, hy: dict, target: dict) -> tup
     body_lines.extend([
         "",
         "Current State:",
-        f"  GEM Signal:  {gem_signal}",
+        f"  Abs Momentum: {'PASS' if abs_pass else 'FAIL'}",
         f"  SPY 12M:     {gem.get('spy_12m_return', 0):+.1%}",
         f"  EFA 12M:     {gem.get('efa_12m_return', 0):+.1%}",
         f"  BIL 12M:     {gem.get('bil_12m_return', 0):+.1%}",
@@ -268,7 +270,7 @@ def format_rebalance_alert(
     Returns:
         (subject, body, short_body) tuple
     """
-    gem_signal = gem.get("gem_signal", "N/A")
+    abs_pass = gem.get("absolute_pass", False)
     regime = hy.get("regime", "N/A")
 
     # Build target string
@@ -285,7 +287,7 @@ def format_rebalance_alert(
         f"Monthly Rebalance: {date_str}",
         "=" * 40,
         "",
-        f"  GEM Signal:  {gem_signal}",
+        f"  Abs Momentum: {'PASS' if abs_pass else 'FAIL'}",
         f"  HY Regime:   {regime} (CCC-BB pctl: {hy.get('ccc_bb_percentile', 0) or 0:.0f})",
         "",
         "Target Allocation:",

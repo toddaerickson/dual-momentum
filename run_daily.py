@@ -49,8 +49,8 @@ def run():
     mom = all_signals["momentum"]
     yc = all_signals["yield_curve"]
 
-    # 4. Compute target portfolio (three-stage v2)
-    target_v2 = portfolio_mod.construct_portfolio_v2(gem, hy, mom)
+    # 4. Compute target portfolio (three-stage)
+    target_v2 = portfolio_mod.construct_portfolio(gem, hy, mom)
     # Extract weights without metadata for display
     target = {k: v for k, v in target_v2.items() if k != "_metadata" and isinstance(v, (int, float))}
 
@@ -58,12 +58,11 @@ def run():
     state.log_daily(as_of_str, gem, hy, yc, momentum_signal=mom)
 
     # 6. Print summary
-    gem_signal = gem.get("gem_signal", "N/A")
     abs_pass = gem.get("absolute_pass", False)
 
     print(f"\n  Date:          {as_of_str}")
 
-    print(f"\n  Stage 1 — GEM Absolute Momentum:")
+    print(f"\n  Stage 1 — Absolute Momentum: {'PASS' if abs_pass else 'FAIL'}")
     print(f"    SPY 12M:     {gem['spy_12m_return']:+.1%}")
     print(f"    EFA 12M:     {gem['efa_12m_return']:+.1%}")
     print(f"    BIL 12M:     {gem['bil_12m_return']:+.1%}")
@@ -108,10 +107,10 @@ def run():
     changes = state.detect_signal_change()
     alerts = []
 
-    if changes.get("gem_changed"):
-        alerts.append(
-            f"GEM signal changed: {changes.get('previous_gem')} → {changes.get('current_gem')}"
-        )
+    if changes.get("abs_mom_changed"):
+        curr = "PASS" if changes.get("current_abs_pass") else "FAIL"
+        prev = "PASS" if changes.get("previous_abs_pass") else "FAIL"
+        alerts.append(f"Absolute momentum changed: {prev} → {curr}")
     if changes.get("regime_changed"):
         alerts.append(
             f"HY regime changed: {changes.get('previous_regime')} → {changes.get('current_regime')}"

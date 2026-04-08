@@ -116,16 +116,16 @@ def construct_portfolio(
         # Risk-off: 100% defensive
         weights[DEFENSIVE_TICKER] = 1.0
         metadata["stage_1_result"] = (
-            f"FAIL -- winner ({gem_signal.get('relative_winner', '?')}) "
-            f"return < BIL return. 100% {DEFENSIVE_TICKER}."
+            f"FAIL -- best equity 12M return < BIL return. "
+            f"100% {DEFENSIVE_TICKER}."
         )
         metadata["stage_2_result"] = "SKIPPED (Stage 1 failed)"
         metadata["stage_3_result"] = "SKIPPED (Stage 1 failed)"
         return _finalize(weights, metadata, rebalance_threshold, prior_weights)
 
     metadata["stage_1_result"] = (
-        f"PASS -- {gem_signal.get('relative_winner', '?')} "
-        f"12M return > BIL. Proceeding to momentum ranking."
+        "PASS -- best equity 12M return > BIL. "
+        "Proceeding to momentum ranking."
     )
 
     # ---- Stage 2: Momentum ranking -> risky asset weights ----
