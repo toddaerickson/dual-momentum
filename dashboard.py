@@ -955,6 +955,7 @@ elif view == "Parameter Sensitivity":
             current_weights = {"SPY": 0.0, "EFA": 0.0, "SHY": 1.0, "ANGL": 0.0}
             results_list = []
             tc_bps = config.TRANSACTION_COST_BPS / 10000
+            prior_momentum_signal = None
 
             for date in daily_returns[mask].index:
                 if date in rebalance_dates:
@@ -990,7 +991,11 @@ elif view == "Parameter Sensitivity":
                     else:
                         hy_reg = {"regime": "TIGHT", "fast_widen_override": False}
 
-                    target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg)
+                    mom_sig = signals_mod.compute_momentum_ranking(
+                        prices, date, prior_signal=prior_momentum_signal,
+                    )
+                    target_weights = portfolio_mod.construct_portfolio(gem_sig, hy_reg, mom_sig)
+                    prior_momentum_signal = mom_sig
                     tc = sum(tc_bps for t in config.ALL_TICKERS
                              if abs(target_weights.get(t, 0) - current_weights.get(t, 0)) > 1e-6)
                     current_weights = target_weights
